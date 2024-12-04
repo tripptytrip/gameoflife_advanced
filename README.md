@@ -36,7 +36,7 @@ A customisable and extensible implementation of Conway's Game of Life, featuring
 1. **Clone the Repository**
 
    ```bash
-   git clone https://github.com/yourusername/gameoflife_advanced.git
+   git clone https://github.com/tripptytrip/gameoflife_advanced.git
    cd gameoflife_advanced
 
 2. **Create a Virtual Environment (Optional but Recommended)**
