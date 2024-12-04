@@ -91,30 +91,35 @@ A customisable and extensible implementation of Conway's Game of Life, featuring
     The simulation will run automatically for the specified number of generations, collecting data in the database.
 
     Note: During auto-run mode, the simulation UI may not update every frame to enhance performance.
-2. **Data Recording**
+   
+### Data Recording
 
-    All simulation data is recorded in a SQLite database named species.db. The data_recorder.py script handles the insertion of records, including:
+1. **All simulation data is recorded in a SQLite database named species.db.**
+   
+   The data_recorder.py script handles the insertion of records, including:
 
     Session ID: Unique identifier for each simulation session.
     Generation: The current generation number.
     Lifeform Data: Birth and survival rules, alive counts, and other metrics for each lifeform.
     Metrics: Statistics such as growth rate, death rate, average lifespan, cluster sizes, entropy, mobility, and diversity.
 
-    The database consists of two tables:
+2. **The database consists of two tables:**
 
     life_records: Stores per-generation data for lifeforms.
     lifeform_meta: Stores metadata for each lifeform used in the simulations.
 
 ### Customization
+
 1. **Lifeforms**
 
-    You can customize lifeforms by setting their birth and survival rules:
+   You can customize lifeforms by setting their birth and survival rules:
 
-    In the settings panel, scroll down to the Lifeform Rules section.
+   In the settings panel, scroll down to the Lifeform Rules section.
 
-    For each lifeform (up to 10), input comma-separated numbers representing neighbor counts for:
-        Birth Rules: Conditions under which a dead cell becomes alive.
-        Survival Rules: Conditions under which a live cell continues to live.
+   For each lifeform (up to 10), input comma-separated numbers representing neighbor counts for:
+   
+     Birth Rules: Conditions under which a dead cell becomes alive.
+     Survival Rules: Conditions under which a live cell continues to live.
 
     Click Apply to restart the simulation with the new rules.
 
@@ -127,23 +132,21 @@ A customisable and extensible implementation of Conway's Game of Life, featuring
       Hexagon Grid: Cells are hexagonally packed.
 
     Select the desired grid shape from the settings panel under Grid Shape.
-    Dependencies:
+    
+### Dependencies:
 
       Python 3.7 or higher
       Pygame library
       SQLite3 (included with Python)
 
-Acknowledgments
+### Acknowledgments
 
-    Conway's Game of Life: A cellular automaton devised by mathematician John Horton Conway.
-    Pygame: A set of Python modules designed for writing video games.
+  Conway's Game of Life: A cellular automaton devised by mathematician John Horton Conway.
+  Pygame: A set of Python modules designed for writing video games.
 
 Additional Notes
 
-    Ensure your system meets the necessary graphical requirements to run Pygame applications.
-    The simulation's performance may vary based on grid size and the number of lifeforms.
-    For large simulations or data collection, consider running the program without rendering the UI to improve performance.
-
-
-You can paste this into the desired location in an existing `.md` file without overwriting oth
+  Ensure your system meets the necessary graphical requirements to run Pygame applications.
+  The simulation's performance may vary based on grid size and the number of lifeforms.
+  For large simulations or data collection, consider running the program without rendering the UI to improve performance.
 
