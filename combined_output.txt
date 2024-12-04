@@ -1,0 +1,3097 @@
+Script: data_recorder.py
+# data_recorder.py
+
+import sqlite3
+import threading
+
+class DataRecorder:
+    """
+    Handles data recording to the database.
+    """
+    def __init__(self, session_id):
+        self.session_id = session_id
+        self.conn = sqlite3.connect('species.db', check_same_thread=False)
+        self.lock = threading.Lock()
+        self.create_tables()
+    
+    def create_tables(self):
+        with self.lock:
+            c = self.conn.cursor()
+            # Create life_records table if it doesn't exist
+            c.execute('''
+                CREATE TABLE IF NOT EXISTS life_records (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT,
+                    generation INTEGER,
+                    lifeform INTEGER,
+                    lifeform_birth_rules TEXT,
+                    lifeform_survival_rules TEXT,
+                    alive_count INTEGER,
+                    static_count INTEGER,
+                    shape TEXT,
+                    average_cluster_size REAL,
+                    growth_rate REAL,
+                    death_rate REAL,
+                    average_lifespan REAL,
+                    max_cluster_size INTEGER,
+                    dominance_ratio REAL,
+                    entropy REAL,
+                    mobility REAL,
+                    diversity INTEGER
+                )
+            ''')
+
+            # Check existing columns in life_records table
+            c.execute("PRAGMA table_info(life_records)")
+            existing_columns = [row[1] for row in c.fetchall()]
+
+            # List of required columns
+            required_columns = [
+                'average_cluster_size',
+                'growth_rate',
+                'death_rate',
+                'average_lifespan',
+                'max_cluster_size',
+                'dominance_ratio',
+                'entropy',
+                'mobility',
+                'diversity'
+            ]
+
+            # Add missing columns
+            for column in required_columns:
+                if column not in existing_columns:
+                    # Determine column type
+                    if column in ['max_cluster_size', 'diversity']:
+                        column_type = 'INTEGER'
+                    else:
+                        column_type = 'REAL'
+                    c.execute(f"ALTER TABLE life_records ADD COLUMN {column} {column_type}")
+
+            # Create lifeform_meta table if it doesn't exist
+            c.execute('''
+                CREATE TABLE IF NOT EXISTS lifeform_meta (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT,
+                    lifeform INTEGER,
+                    lifeform_profile TEXT UNIQUE
+                )
+            ''')
+            self.conn.commit()
+        
+    def insert_record(self, generation, lifeform_id, birth_rules, survival_rules, alive_count, static_count, shape, metrics):
+        with self.lock:
+            c = self.conn.cursor()
+            lifeform_profile = ''.join(map(str, birth_rules)) + ''.join(map(str, survival_rules))
+            # Insert lifeform metadata if not exists
+            c.execute('''
+                INSERT OR IGNORE INTO lifeform_meta (
+                    session_id,
+                    lifeform,
+                    lifeform_profile
+                ) VALUES (?, ?, ?)
+            ''', (
+                self.session_id,
+                lifeform_id,
+                lifeform_profile
+            ))
+            # Insert lifeform record
+            c.execute('''
+                INSERT INTO life_records (
+                    session_id,
+                    generation,
+                    lifeform,
+                    lifeform_birth_rules,
+                    lifeform_survival_rules,
+                    alive_count,
+                    static_count,
+                    shape,
+                    average_cluster_size,
+                    growth_rate,
+                    death_rate,
+                    average_lifespan,
+                    max_cluster_size,
+                    dominance_ratio,
+                    entropy,
+                    mobility,
+                    diversity
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                self.session_id,
+                generation,
+                lifeform_id,
+                ','.join(map(str, birth_rules)),
+                ','.join(map(str, survival_rules)),
+                alive_count,
+                static_count,
+                shape,
+                metrics.get('average_cluster_size', 0),
+                metrics.get('growth_rate', 0),
+                metrics.get('death_rate', 0),
+                metrics.get('average_lifespan', 0),
+                metrics.get('max_cluster_size', 0),
+                metrics.get('dominance_ratio', 0),
+                metrics.get('entropy', 0),
+                metrics.get('mobility', 0),
+                metrics.get('diversity', 0)
+            ))
+            self.conn.commit()
+        
+    def close(self):
+        with self.lock:
+            self.conn.close()
+
+
+Script: game.py
+# game.py
+
+import pygame
+import uuid
+from settings import (
+    WINDOW_WIDTH,
+    WINDOW_HEIGHT,
+    BACKGROUND_COLOR,
+    PANEL_BACKGROUND_COLOR,
+    FONT_NAME,
+    FONT_SIZE,
+    TEXT_COLOR,
+    LEFT_PANEL_WIDTH
+)
+from settings_panel import SettingsPanel
+from grid_factory import create_grid
+from tooltip import Tooltip
+from data_recorder import DataRecorder  # Ensure DataRecorder is imported
+from lifeform import Lifeform  # Ensure Lifeform is imported
+import random
+
+class GameOfLife:
+    """
+    Manages the main game loop and user interactions.
+    """
+
+    def __init__(self):
+        pygame.init()
+        self.screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.RESIZABLE)
+        pygame.display.set_caption("Conway's Game of Life Simulator")
+        self.clock = pygame.time.Clock()
+        
+        # Initialize settings
+        self.fps = 30  # Ensure this is set before SettingsPanel
+        self.number_of_lifeforms = 1  # Default to 1 lifeform
+        self.lifeforms = []
+        self.shape = 'triangle'  # Initialize grid shape
+
+        # **Added grid_width and grid_height attributes**
+        self.grid_width = 50      # Default grid width
+        self.grid_height = 50     # Default grid height
+
+        self.randomise_lifeforms()  # Initialize lifeforms
+        self.initial_alive_percentage = 50 / 100.0  # Convert to 0-1 range
+        self.session_id = str(uuid.uuid4())  # Generate a unique session ID
+        self.data_recorder = DataRecorder(self.session_id)  # Initialize DataRecorder
+
+        # Updated to include grid_width and grid_height
+        self.grid = create_grid(
+            lifeforms=self.lifeforms[:self.number_of_lifeforms],
+            initial_alive_percentage=self.initial_alive_percentage,
+            shape=self.shape,
+            grid_width=self.grid_width,      # Pass grid_width
+            grid_height=self.grid_height     # Pass grid_height
+        )
+        self.is_running = False
+        self.is_paused = True
+        self.generation = 0
+        self.font = pygame.font.SysFont(FONT_NAME, FONT_SIZE)
+        
+        # Auto-run settings
+        self.auto_run_mode = False
+        self.auto_run_sessions = 0
+        self.auto_run_generations = 100  # Default value
+        print(f"auto_run_generations set to {self.auto_run_generations}")
+
+        # Initialize SettingsPanel after grid_width and grid_height are set
+        self.settings_panel = SettingsPanel(self)
+        print("SettingsPanel initialized")
+
+        # Initialize counters and history
+        self.total_births = 0
+        self.total_deaths = 0
+        self.current_alive = sum(cell.alive for cell in self.grid.cells.values())
+        self.current_dead = len(self.grid.cells) - self.current_alive
+        self.current_static = sum(1 for cell in self.grid.cells.values() if cell.alive_duration > 10)
+        self.history_generations = [self.generation]
+        self.history_alive = [self.current_alive]
+        self.history_dead = [self.current_dead]
+        self.history_static = [self.current_static]
+        self.history_births = [0]
+        self.history_deaths = [0]
+
+        # Initialize lifeform alive counts
+        self.lifeform_alive_counts = {lifeform.id: [] for lifeform in self.lifeforms[:self.number_of_lifeforms]}
+        self.update_lifeform_alive_counts(initial=True)
+
+        # Initialize chart_rect
+        self.chart_rect = None
+        # Calculate grid offsets based on initial chart position
+        self.calculate_grid_offsets()
+
+        # Initialize Tooltip
+        self.tooltip = Tooltip()
+
+    def randomise_lifeforms(self):
+        """
+        Randomly generate lifeforms with unique birth and survival rules.
+        """
+        self.lifeforms = []
+        for i in range(1, 11):  # Up to 10 lifeforms
+            # Randomly select birth and survival rules
+            birth_rules = sorted(random.sample(range(0, 9), random.randint(1, 4)))
+            survival_rules = sorted(random.sample(range(0, 9), random.randint(1, 4)))
+            lifeform = Lifeform(lifeform_id=i, birth_rules=birth_rules, survival_rules=survival_rules)
+            self.lifeforms.append(lifeform)
+
+    def create_grid(self):
+        # Compute available screen space
+        available_width, available_height = self.get_available_screen_space()
+
+        self.grid = create_grid(
+            lifeforms=self.lifeforms[:self.number_of_lifeforms],
+            initial_alive_percentage=self.initial_alive_percentage,
+            shape=self.shape,
+            grid_width=self.grid_width,      # Pass grid_width
+            grid_height=self.grid_height,    # Pass grid_height
+            available_width=available_width,
+            available_height=available_height
+        )
+        # Calculate grid offsets
+        self.calculate_grid_offsets()
+
+        # Reset counters and histories
+        self.total_births = 0
+        self.total_deaths = 0
+        self.generation = 0
+        self.current_alive = sum(cell.alive for cell in self.grid.cells.values())
+        self.current_dead = len(self.grid.cells) - self.current_alive
+        self.current_static = sum(1 for cell in self.grid.cells.values() if cell.alive_duration > 10)
+        self.history_generations = [self.generation]
+        self.history_alive = [self.current_alive]
+        self.history_dead = [self.current_dead]
+        self.history_static = [self.current_static]
+        self.history_births = [0]
+        self.history_deaths = [0]
+
+        # Initialize lifeform alive counts
+        self.lifeform_alive_counts = {lifeform.id: [] for lifeform in self.lifeforms[:self.number_of_lifeforms]}
+        self.update_lifeform_alive_counts(initial=True)
+
+        # Initialize chart_rect
+        self.chart_rect = None
+        # Calculate grid offsets based on initial chart position
+        self.calculate_grid_offsets()
+
+    def calculate_grid_offsets(self):
+        padding = 10  # Padding in pixels
+
+        chart_rect = self.get_chart_rect()
+        grid_start_y = chart_rect.bottom + padding
+
+        grid_start_x = LEFT_PANEL_WIDTH + padding  # Start to the right of the left panel for all shapes
+
+        self.grid.calculate_offsets(start_x=grid_start_x, start_y=grid_start_y)
+
+    def get_chart_rect(self):
+        """
+        Calculate and return the chart rectangle.
+        """
+        left_padding = 60  # Increased padding to accommodate left y-axis labels
+        right_padding = 60  # Increased padding to accommodate right y-axis labels
+        top_padding = 10
+        chart_height = 180
+
+        chart_rect = pygame.Rect(
+            LEFT_PANEL_WIDTH + left_padding,  # Start to the right of the left panel and left padding
+            top_padding,
+            self.screen.get_width() - LEFT_PANEL_WIDTH - left_padding - right_padding,
+            chart_height
+        )
+        return chart_rect
+
+    def get_available_screen_space(self):
+        """
+        Calculate the available screen space for the grid based on UI elements.
+
+        Returns:
+            tuple: (available_width, available_height)
+        """
+        padding = 10  # Padding in pixels
+        available_width = self.screen.get_width() - LEFT_PANEL_WIDTH - padding * 2
+        chart_rect = self.get_chart_rect()
+        available_height = self.screen.get_height() - chart_rect.bottom - padding * 2
+        return available_width, available_height
+
+    def run(self):
+        """
+        Runs the main game loop.
+        """
+        while True:
+            self.handle_events()
+            if not self.is_paused and self.is_running:
+                self.update_simulation()
+            elif self.auto_run_mode:
+                self.auto_run_simulations()
+            self.draw()
+            pygame.display.flip()
+            self.clock.tick(self.fps)
+
+    def update_simulation(self):
+        """
+        Update the simulation by one generation.
+        """
+        # Update the grid and get per-lifeform counts and metrics
+        births, deaths, static_cells, lifeform_alive_counts, lifeform_static_counts, lifeform_metrics = self.grid.update()
+        self.generation += 1
+        self.total_births += births
+        self.total_deaths += deaths
+        self.current_alive = sum(cell.alive for cell in self.grid.cells.values())
+        self.current_dead = len(self.grid.cells) - self.current_alive
+        self.current_static = static_cells
+
+        # Update history
+        self.history_generations.append(self.generation)
+        self.history_alive.append(self.current_alive)
+        self.history_dead.append(self.current_dead)
+        self.history_static.append(self.current_static)
+        self.history_births.append(self.total_births)
+        self.history_deaths.append(self.total_deaths)
+
+        # Update lifeform alive counts
+        self.update_lifeform_alive_counts(lifeform_alive_counts)
+
+        # Insert data into the database
+        for lifeform in self.lifeforms[:self.number_of_lifeforms]:
+            lifeform_id = lifeform.id
+            birth_rules_array = [1 if i in lifeform.birth_rules else 0 for i in range(9)]  # Adjusted to 9 for consistency
+            survival_rules_array = [1 if i in lifeform.survival_rules else 0 for i in range(9)]
+            alive_count = lifeform_alive_counts.get(lifeform_id, 0)
+            static_count = lifeform_static_counts.get(lifeform_id, 0)
+            metrics = lifeform_metrics.get(lifeform_id, {})
+            self.data_recorder.insert_record(
+                generation=self.generation,
+                lifeform_id=lifeform_id,
+                birth_rules=','.join(map(str, birth_rules_array)),
+                survival_rules=','.join(map(str, survival_rules_array)),
+                alive_count=alive_count,
+                static_count=static_count,
+                shape=self.shape,
+                metrics=metrics
+            )
+
+    def auto_run_simulations(self):
+        """
+        Run simulations automatically for data collection.
+        """
+        if self.auto_run_session_count < self.auto_run_sessions:
+            # Set random parameters
+            self.initial_alive_percentage = random.uniform(0.01, 0.9)
+            self.number_of_lifeforms = random.randint(1, 10)
+            self.shape = random.choice(['triangle', 'square', 'hexagon'])
+            self.randomise_lifeforms()
+
+            # Create new grid with random settings
+            self.create_grid()
+
+            # Run the simulation for the specified number of generations
+            num_generations = self.auto_run_generations  # Use the user-defined value
+            for _ in range(num_generations):
+                self.update_simulation()
+
+            self.auto_run_session_count += 1
+        else:
+            # Auto-run complete
+            self.auto_run_mode = False
+            print(f"Auto-run completed: {self.auto_run_sessions} sessions executed.")
+
+    def start_auto_run(self, num_sessions):
+        """
+        Initialize auto-run mode with the specified number of sessions.
+
+        Args:
+            num_sessions (int): The number of sessions to run automatically.
+        """
+        self.auto_run_mode = True
+        self.auto_run_sessions = num_sessions
+        self.auto_run_session_count = 0
+        self.is_running = False
+        self.is_paused = True  # Ensure normal simulation is paused
+
+    def handle_events(self):
+        """
+        Handle user input and events.
+        """
+        mouse_pos = pygame.mouse.get_pos()
+        self.tooltip.update('')  # Reset tooltip
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                # Close data recorder
+                if hasattr(self, 'data_recorder') and self.data_recorder:
+                    self.data_recorder.close()
+                pygame.quit()
+                quit()
+            # Always handle settings panel events
+            self.settings_panel.handle_event(event)
+            if event.type == pygame.VIDEORESIZE:
+                self.screen = pygame.display.set_mode(event.size, pygame.RESIZABLE)
+                self.calculate_grid_offsets()  # Recalculate offsets on window resize
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                if event.button == 1:  # Left click
+                    self.grid.handle_click(event.pos)
+                    # Update current alive and dead counts
+                    self.current_alive = sum(cell.alive for cell in self.grid.cells.values())
+                    self.current_dead = len(self.grid.cells) - self.current_alive
+                    self.current_static = sum(1 for cell in self.grid.cells.values() if cell.alive_duration > 10)
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_SPACE:
+                    self.is_paused = not self.is_paused
+                    self.is_running = True
+                elif event.key == pygame.K_r:
+                    self.create_grid()
+                    self.is_paused = True
+                elif event.key == pygame.K_n:
+                    self.settings_panel.randomise_lifeforms()
+                    self.create_grid()
+                    self.is_paused = True
+                elif event.key == pygame.K_s:
+                    if self.is_paused:
+                        self.update_simulation()
+
+        # Update tooltip based on hovered element
+        self.update_tooltip(mouse_pos)
+
+    def update_tooltip(self, mouse_pos):
+        """
+        Update the tooltip text based on the current hovered element.
+        """
+        tooltip_text = ''
+        # Check if hovering over buttons in settings panel
+        if self.settings_panel.hovered_button:
+            tooltip_text = f'Click to {self.settings_panel.hovered_button}'
+        # Check if hovering over grid cells
+        else:
+            # You can add more tooltip conditions here if needed
+            pass
+        self.tooltip.update(tooltip_text)
+
+    def update_settings(self):
+        """
+        Apply updated settings from the settings panel.
+        """
+        # Update number_of_lifeforms and other settings is handled via callbacks
+        # Recreate the grid with updated settings and lifeforms
+        self.create_grid()
+
+    def update_lifeform_alive_counts(self, lifeform_alive_counts=None, initial=False):
+        """
+        Update the counts of alive cells per lifeform.
+
+        Args:
+            lifeform_alive_counts (dict, optional): Dictionary mapping lifeform IDs to alive counts.
+            initial (bool): If True, initializes the counts based on the current grid.
+        """
+        if initial:
+            # Initialize with current counts from the grid
+            for lifeform in self.lifeforms[:self.number_of_lifeforms]:
+                count = sum(
+                    cell.alive and cell.lifeform_id == lifeform.id
+                    for cell in self.grid.cells.values()
+                )
+                self.lifeform_alive_counts[lifeform.id].append(count)
+        elif lifeform_alive_counts is not None:
+            # Append counts to existing history
+            for lifeform_id, count in lifeform_alive_counts.items():
+                if lifeform_id in self.lifeform_alive_counts:
+                    self.lifeform_alive_counts[lifeform_id].append(count)
+                else:
+                    self.lifeform_alive_counts[lifeform_id] = [count]
+
+    def draw(self):
+        """
+        Draw the game elements on the screen with improved visuals.
+        """
+        self.screen.fill(BACKGROUND_COLOR)
+        # Draw line chart
+        self.draw_line_chart()
+        # Draw grid
+        self.grid.draw(self.screen)
+
+        # Draw left panel background with rounded corners
+        panel_rect = pygame.Rect(0, 0, LEFT_PANEL_WIDTH, self.screen.get_height())
+        pygame.draw.rect(self.screen, PANEL_BACKGROUND_COLOR, panel_rect, border_radius=10)
+
+        # Display text within the left panel using improved font
+        text_x = 20  # Increased padding
+        y_offset = 20
+
+        # Use a larger font for headings
+        heading_font = pygame.font.SysFont(FONT_NAME, FONT_SIZE + 4, bold=True)
+        gen_text = heading_font.render(f'Generation: {self.generation}', True, TEXT_COLOR)
+        self.screen.blit(gen_text, (text_x, y_offset))
+        y_offset += 40
+
+        # Display instructions with better spacing
+        instructions = [
+            "Controls:",
+            "Space: Start/Pause",
+            "R: Reset Grid",
+            "N: New Random Grid",
+            "S: Step Forward (paused)",
+            "Click: Toggle Cell",
+        ]
+        for text in instructions:
+            instr_text = self.font.render(text, True, TEXT_COLOR)
+            self.screen.blit(instr_text, (text_x, y_offset))
+            y_offset += 25
+
+        y_offset += 10  # Add some spacing
+
+        # Display counts with better spacing
+        counts = [
+            f"Total Births: {self.total_births}",
+            f"Total Deaths: {self.total_deaths}",
+            f"Current Alive: {self.current_alive}",
+            f"Current Dead: {self.current_dead}",
+            f"Static Cells: {self.current_static}",
+        ]
+        for text in counts:
+            counts_text = self.font.render(text, True, TEXT_COLOR)
+            self.screen.blit(counts_text, (text_x, y_offset))
+            y_offset += 25
+
+        y_offset += 10  # Add some spacing
+
+        # Draw settings panel within the left panel
+        self.settings_panel.draw(self.screen, x=10, y=y_offset, width=LEFT_PANEL_WIDTH - 20)
+
+        # Draw tooltip
+        self.tooltip.draw(self.screen, pygame.mouse.get_pos())
+
+    def draw_line_chart(self):
+        """
+        Draws the line chart of counts over generations with lifeform alive counts and static cells.
+        """
+        # Get chart area
+        chart_rect = self.get_chart_rect()
+        self.chart_rect = chart_rect  # Store for use in positioning the grid
+        pygame.draw.rect(self.screen, (50, 50, 50), chart_rect)
+        pygame.draw.rect(self.screen, TEXT_COLOR, chart_rect, 2)
+
+        # Determine max generations
+        max_generations = min(1000, len(self.history_generations))
+
+        # Determine max count for y-axis
+        max_count = max(
+            [1] +
+            [max(counts[-max_generations:]) if counts[-max_generations:] else 1 for counts in self.lifeform_alive_counts.values()] +
+            ([max(self.history_static[-max_generations:]) if self.history_static[-max_generations:] else 1])
+        )
+
+        if len(self.history_generations) > 1:
+            # Scaling factors
+            x_scale = chart_rect.width / (len(self.history_generations) - 1)
+            y_scale = chart_rect.height / max_count
+
+            # Plot lines for each lifeform
+            for lifeform in self.lifeforms[:self.number_of_lifeforms]:
+                lifeform_id = lifeform.id
+                counts = self.lifeform_alive_counts[lifeform_id][-max_generations:]
+                points = [
+                    (chart_rect.x + i * x_scale,
+                     chart_rect.bottom - counts[i] * y_scale)
+                    for i in range(len(counts))
+                ]
+                pygame.draw.lines(self.screen, lifeform.color_alive, False, points, 2)
+
+            # Plot static cells line
+            data_static = self.history_static[-max_generations:]
+            points_static = [
+                (chart_rect.x + i * x_scale,
+                 chart_rect.bottom - data_static[i] * y_scale)
+                for i in range(len(data_static))
+            ]
+            # Define color for static cells line
+            color_static_line = (255, 255, 255)  # White color
+            pygame.draw.lines(self.screen, color_static_line, False, points_static, 2)
+
+            # Draw y-axis labels
+            y_axis_ticks = 5  # Number of ticks on y-axis
+            for i in range(y_axis_ticks + 1):
+                y_value = int(i * max_count / y_axis_ticks)
+                y_pos = chart_rect.bottom - i * chart_rect.height / y_axis_ticks
+                label = self.font.render(str(y_value), True, TEXT_COLOR)
+                label_rect = label.get_rect()
+                label_x = chart_rect.x - label_rect.width - 10  # Adjusted spacing
+                self.screen.blit(label, (label_x, y_pos - label_rect.height / 2))
+                # Draw tick marks
+                pygame.draw.line(self.screen, TEXT_COLOR, (chart_rect.x - 5, y_pos), (chart_rect.x, y_pos))
+
+            # Add legend
+            legend_texts = []
+            for lifeform in self.lifeforms[:self.number_of_lifeforms]:
+                legend_texts.append((f"Lifeform {lifeform.id}", lifeform.color_alive))
+            legend_texts.append(("Static Cells", color_static_line))
+
+            for i, (text, color) in enumerate(legend_texts):
+                legend = self.font.render(text, True, color)
+                self.screen.blit(legend, (chart_rect.x + 10, chart_rect.y + 10 + i * 20))
+
+if __name__ == '__main__':
+    game = GameOfLife()
+    game.run()
+
+
+Script: grid_factory.py
+# grid_factory.py
+
+from triangle_grid import TriangleGrid
+from square_grid import SquareGrid
+from hexagon_grid import HexagonGrid
+
+def create_grid(lifeforms=None, initial_alive_percentage=0.5, shape='triangle',
+                grid_width=50, grid_height=50, available_width=None, available_height=None):
+    if shape == 'triangle':
+        return TriangleGrid(
+            lifeforms=lifeforms,
+            initial_alive_percentage=initial_alive_percentage,
+            grid_width=grid_width,
+            grid_height=grid_height,
+            available_width=available_width,
+            available_height=available_height
+        )
+    elif shape == 'square':
+        return SquareGrid(
+            lifeforms=lifeforms,
+            initial_alive_percentage=initial_alive_percentage,
+            grid_width=grid_width,
+            grid_height=grid_height,
+            available_width=available_width,
+            available_height=available_height
+        )
+    elif shape == 'hexagon':
+        return HexagonGrid(
+            lifeforms=lifeforms,
+            initial_alive_percentage=initial_alive_percentage,
+            grid_width=grid_width,
+            grid_height=grid_height,
+            available_width=available_width,
+            available_height=available_height
+        )
+    else:
+        raise ValueError(f"Unsupported grid shape: {shape}")
+
+
+Script: hexagon_cell.py
+# hexagon_cell.py
+
+import pygame
+import math
+from settings import DEAD_CELL_COLOR, GRID_LINE_COLOR
+
+class HexagonCell:
+    """
+    Represents a single hexagonal cell in the grid.
+    """
+
+    def __init__(self, q, r, size, alive=False, lifeform_id=None):
+        """
+        Initialize a hexagon cell.
+
+        Args:
+            q (int): Axial coordinate q.
+            r (int): Axial coordinate r.
+            size (int): Size (radius) of the hexagon.
+            alive (bool): State of the cell, alive or dead.
+            lifeform_id (int or None): Identifier of the lifeform the cell belongs to.
+        """
+        self.q = q
+        self.r = r
+        self.size = size
+        self.alive = alive
+        self.neighbors = []
+        self.alive_duration = 0  # Number of consecutive generations the cell has been alive
+        self.lifeform_id = lifeform_id  # Lifeform identifier
+
+    def get_position(self, offset_x, offset_y):
+        """
+        Calculate the pixel position of the hexagon cell for flat-topped hexagons.
+        """
+        x = self.size * (3/2) * self.q
+        y = self.size * math.sqrt(3) * (self.r + self.q / 2)
+        return (x + offset_x, y + offset_y)
+
+    def draw(self, surface, offset_x, offset_y, lifeform=None):
+        """
+        Draw the hexagon cell on the given surface.
+
+        Args:
+            surface (pygame.Surface): The surface to draw on.
+            offset_x (int): Horizontal offset for rendering.
+            offset_y (int): Vertical offset for rendering.
+            lifeform (Lifeform or None): The lifeform object associated with this cell.
+        """
+        # Determine the color based on lifeform and alive_duration
+        if self.alive:
+            if self.alive_duration > 10 and lifeform:
+                color = lifeform.color_static
+            elif lifeform:
+                color = lifeform.color_alive
+            else:
+                color = DEAD_CELL_COLOR
+        else:
+            color = DEAD_CELL_COLOR
+
+        corners = self.get_corners(offset_x, offset_y)
+        pygame.draw.polygon(surface, color, corners)
+        # Optional: Draw grid lines for better visibility
+        pygame.draw.polygon(surface, GRID_LINE_COLOR, corners, 1)
+
+    def get_corners(self, offset_x, offset_y):
+        """
+        Calculate the corner positions of the hexagon cell for flat-topped hexagons.
+        """
+        center_x, center_y = self.get_position(offset_x, offset_y)
+        angles = [math.radians(60 * i) for i in range(6)]  # Correct angles for flat-topped hexagons
+        corners = [
+            (center_x + self.size * math.cos(angle),
+            center_y + self.size * math.sin(angle))
+            for angle in angles
+        ]
+        return corners
+
+    def __hash__(self):
+        return hash((self.q, self.r))
+
+    def __eq__(self, other):
+        return isinstance(other, HexagonCell) and self.q == other.q and self.r == other.r
+
+
+Script: hexagon_grid.py
+# hexagon_grid.py
+
+import pygame
+from hexagon_cell import HexagonCell
+from lifeform import Lifeform
+import random
+import math
+
+class HexagonGrid:
+    """
+    Manages the hexagonal grid and cell states for multiple lifeforms.
+    """
+
+    def __init__(self, lifeforms=None, initial_alive_percentage=0.5,
+                 grid_width=50, grid_height=50, available_width=None, available_height=None):
+        """
+        Initialize the hexagonal grid based on the specified grid size and lifeforms.
+        """
+        self.cells = {}
+        self.offset_x = 0
+        self.offset_y = 0
+        self.cell_size = None  # Will be calculated
+        self.lifeforms = lifeforms if lifeforms else []
+        self.initial_alive_percentage = initial_alive_percentage
+        self.generation = 0
+        self.grid_width = grid_width
+        self.grid_height = grid_height
+        self.available_width = available_width
+        self.available_height = available_height
+        self.create_grid()
+
+    def calculate_offsets(self, start_x=0, start_y=0):
+        """
+        Calculate offsets to position the grid so that its top-left corner is at (start_x, start_y).
+        """
+        # First, compute the minimum x and y positions
+        min_x = float('inf')
+        min_y = float('inf')
+        for cell in self.cells.values():
+            x, y = cell.get_position(0, 0)  # Get position without offset
+            if x < min_x:
+                min_x = x
+            if y < min_y:
+                min_y = y
+
+        self.offset_x = start_x - min_x
+        self.offset_y = start_y - min_y
+
+    def create_grid(self):
+        """
+        Create the hexagonal grid of cells and distribute initial live cells among lifeforms.
+        """
+        # Calculate cell size based on available space and grid dimensions
+        if self.available_width and self.available_height:
+            # For flat-topped hexagons
+            horizontal_spacing = 3/2  # x-distance between centers of adjacent hexes horizontally
+            vertical_spacing = math.sqrt(3) / 2  # y-distance between centers of adjacent hexes vertically
+
+            cell_width = self.available_width / ((self.grid_width + 0.5) * horizontal_spacing)
+            cell_height = self.available_height / ((self.grid_height + 0.5) * vertical_spacing)
+            self.cell_size = int(min(cell_width, cell_height))
+        else:
+            self.cell_size = 10  # Default cell size
+
+        # Create cells
+        for col in range(self.grid_width):
+            for row in range(self.grid_height):
+                q = col - self.grid_width // 2
+                r = row - (col // 2) - self.grid_height // 2
+                cell = HexagonCell(q, r, self.cell_size, alive=False, lifeform_id=None)
+                self.cells[(q, r)] = cell
+
+        total_cells = len(self.cells)
+        alive_cells_total = int(total_cells * self.initial_alive_percentage)
+        num_lifeforms = len(self.lifeforms) if self.lifeforms else 1
+        alive_cells_per_lifeform = max(alive_cells_total // num_lifeforms, 1)
+
+        # Assign alive cells to lifeforms
+        if self.lifeforms:
+            for lifeform in self.lifeforms:
+                assigned = 0
+                while assigned < alive_cells_per_lifeform:
+                    cell = random.choice(list(self.cells.values()))
+                    if not cell.alive:
+                        cell.alive = True
+                        cell.lifeform_id = lifeform.id
+                        cell.alive_duration = 1
+                        assigned += 1
+        else:
+            # Single lifeform scenario
+            for cell in self.cells.values():
+                if random.random() < self.initial_alive_percentage:
+                    cell.alive = True
+                    cell.lifeform_id = 1  # Default lifeform ID
+                    cell.alive_duration = 1
+
+        self.calculate_neighbors()
+
+    def calculate_neighbors(self):
+        """
+        Calculate and assign neighbors for each cell.
+        """
+        # Define neighbor offsets for axial coordinates in flat-topped layout
+        neighbor_directions = [
+            (+1, 0), (+1, -1), (0, -1),
+            (-1, 0), (-1, +1), (0, +1)
+        ]
+        for cell in self.cells.values():
+            neighbors = []
+            for dq, dr in neighbor_directions:
+                neighbor_coord = (cell.q + dq, cell.r + dr)
+                neighbor = self.cells.get(neighbor_coord)
+                if neighbor:
+                    neighbors.append(neighbor)
+            cell.neighbors = neighbors
+
+    def draw(self, surface):
+        """
+        Draw all cells in the grid with appropriate colors based on lifeforms.
+
+        Args:
+            surface (pygame.Surface): The surface to draw on.
+        """
+        for cell in self.cells.values():
+            lifeform = self.get_lifeform_by_id(cell.lifeform_id)
+            cell.draw(surface, self.offset_x, self.offset_y, lifeform=lifeform)
+
+    def get_lifeform_by_id(self, lifeform_id):
+        """
+        Retrieve a Lifeform object by its ID.
+
+        Args:
+            lifeform_id (int or None): The ID of the lifeform.
+
+        Returns:
+            Lifeform or None: The corresponding Lifeform object or None if not found.
+        """
+        if lifeform_id is None:
+            return None
+        for lifeform in self.lifeforms:
+            if lifeform.id == lifeform_id:
+                return lifeform
+        return None
+
+    def update(self):
+        """
+        Update the grid to the next generation based on each lifeform's rules.
+
+        Returns:
+            tuple: A tuple containing the number of births, deaths, static cells,
+                   lifeform_alive_counts, lifeform_static_counts, lifeform_metrics.
+        """
+        new_states = {}
+        births = 0
+        deaths = 0
+        static_cells = 0
+
+        lifeform_static_counts = {lifeform.id: 0 for lifeform in self.lifeforms}
+        lifeform_alive_counts = {lifeform.id: 0 for lifeform in self.lifeforms}
+        lifeform_death_counts = {lifeform.id: 0 for lifeform in self.lifeforms}
+        lifeform_birth_counts = {lifeform.id: 0 for lifeform in self.lifeforms}
+        lifeform_lifespans = {lifeform.id: [] for lifeform in self.lifeforms}
+        previous_alive_counts = getattr(self, 'previous_alive_counts', {lifeform.id: 0 for lifeform in self.lifeforms})
+        lifeform_previous_positions = getattr(self, 'lifeform_previous_positions', {lifeform.id: set() for lifeform in self.lifeforms})
+        lifeform_current_positions = {lifeform.id: set() for lifeform in self.lifeforms}
+
+        # Record previous positions
+        for cell in self.cells.values():
+            if cell.alive:
+                lifeform_previous_positions[cell.lifeform_id].add((cell.q, cell.r))
+
+        for cell in self.cells.values():
+            if cell.lifeform_id is None:
+                # Dead cell: Check for possible births from any lifeform
+                possible_births = {}
+                for lifeform in self.lifeforms:
+                    live_neighbors = sum(1 for neighbor in cell.neighbors if neighbor.alive and neighbor.lifeform_id == lifeform.id)
+                    if live_neighbors in lifeform.birth_rules:
+                        possible_births[lifeform.id] = live_neighbors
+                if possible_births:
+                    # Randomly select one lifeform to birth the cell
+                    selected_lifeform_id = random.choice(list(possible_births.keys()))
+                    new_states[cell] = selected_lifeform_id  # Cell becomes alive with selected lifeform
+                    births += 1
+                    lifeform_birth_counts[selected_lifeform_id] += 1
+                else:
+                    new_states[cell] = None  # Remains dead
+            else:
+                # Live cell: Apply survival rules of its own lifeform
+                lifeform = self.get_lifeform_by_id(cell.lifeform_id)
+                if lifeform:
+                    live_neighbors = sum(1 for neighbor in cell.neighbors if neighbor.alive and neighbor.lifeform_id == lifeform.id)
+                    if live_neighbors in lifeform.survival_rules:
+                        new_states[cell] = lifeform.id  # Survives
+                    else:
+                        new_states[cell] = None  # Dies
+                        deaths += 1
+                        lifeform_death_counts[cell.lifeform_id] += 1
+                        # Record lifespan
+                        lifeform_lifespans[cell.lifeform_id].append(cell.alive_duration)
+                else:
+                    new_states[cell] = None  # Shouldn't happen
+
+        # Update cell states and alive_duration
+        for cell, new_lifeform_id in new_states.items():
+            if new_lifeform_id is not None:
+                if cell.alive:
+                    if cell.lifeform_id == new_lifeform_id:
+                        cell.alive_duration += 1
+                    else:
+                        # Record lifespan before changing lifeform
+                        lifeform_lifespans[cell.lifeform_id].append(cell.alive_duration)
+                        cell.lifeform_id = new_lifeform_id
+                        cell.alive_duration = 1
+                else:
+                    cell.alive = True
+                    cell.lifeform_id = new_lifeform_id
+                    cell.alive_duration = 1
+            else:
+                if cell.alive:
+                    # Record lifespan
+                    lifeform_lifespans[cell.lifeform_id].append(cell.alive_duration)
+                    cell.alive = False
+                    cell.lifeform_id = None
+                    cell.alive_duration = 0
+
+            # Count static cells and alive cells per lifeform
+            if cell.alive:
+                lifeform_alive_counts[cell.lifeform_id] += 1
+                lifeform_current_positions[cell.lifeform_id].add((cell.q, cell.r))
+                if cell.alive_duration > 10:
+                    static_cells += 1
+                    lifeform_static_counts[cell.lifeform_id] += 1
+
+        # Compute metrics for each lifeform
+        lifeform_metrics = {}
+        total_cells = len(self.cells)
+        total_alive_cells = sum(lifeform_alive_counts.values())
+        for lifeform in self.lifeforms:
+            lifeform_id = lifeform.id
+            metrics = {}
+
+            # Average Cluster Size for Static Lifeforms
+            metrics['average_cluster_size'] = self.calculate_average_cluster_size(lifeform_id)
+
+            # Growth Rate
+            previous_alive = previous_alive_counts.get(lifeform_id, 0)
+            current_alive = lifeform_alive_counts.get(lifeform_id, 0)
+            metrics['growth_rate'] = (current_alive - previous_alive) if self.generation > 0 else 0
+
+            # Death Rate
+            metrics['death_rate'] = lifeform_death_counts.get(lifeform_id, 0)
+
+            # Average Lifespan of Cells
+            lifespans = lifeform_lifespans.get(lifeform_id, [])
+            if lifespans:
+                metrics['average_lifespan'] = sum(lifespans) / len(lifespans)
+            else:
+                metrics['average_lifespan'] = 0
+
+            # Maximum Cluster Size
+            metrics['max_cluster_size'] = self.calculate_max_cluster_size(lifeform_id)
+
+            # Dominance Ratio
+            if total_alive_cells > 0:
+                metrics['dominance_ratio'] = current_alive / total_alive_cells
+            else:
+                metrics['dominance_ratio'] = 0
+
+            # Entropy (Spatial Distribution)
+            metrics['entropy'] = self.calculate_entropy(lifeform_id)
+
+            # Mobility
+            previous_positions = lifeform_previous_positions.get(lifeform_id, set())
+            current_positions = lifeform_current_positions.get(lifeform_id, set())
+            if previous_positions:
+                moved_cells = len(current_positions - previous_positions)
+                total_previous_cells = len(previous_positions)
+                metrics['mobility'] = moved_cells / total_previous_cells
+            else:
+                metrics['mobility'] = 0
+
+            # Diversity of Patterns
+            metrics['diversity'] = self.calculate_pattern_diversity(lifeform_id)
+
+            lifeform_metrics[lifeform_id] = metrics
+
+        # Save current alive counts and positions for the next generation
+        self.previous_alive_counts = lifeform_alive_counts.copy()
+        self.lifeform_previous_positions = lifeform_current_positions
+        self.generation += 1  # Increment generation for tracking growth rate
+
+        return births, deaths, static_cells, lifeform_alive_counts, lifeform_static_counts, lifeform_metrics
+
+    def calculate_average_cluster_size(self, lifeform_id):
+        """
+        Calculate the average cluster size for static lifeforms.
+
+        Args:
+            lifeform_id (int): The ID of the lifeform.
+
+        Returns:
+            float: The average cluster size.
+        """
+        clusters = self.identify_clusters(lifeform_id)
+        if clusters:
+            cluster_sizes = [len(cluster) for cluster in clusters]
+            return sum(cluster_sizes) / len(cluster_sizes)
+        else:
+            return 0
+
+    def calculate_max_cluster_size(self, lifeform_id):
+        """
+        Calculate the maximum cluster size for the lifeform.
+
+        Args:
+            lifeform_id (int): The ID of the lifeform.
+
+        Returns:
+            int: The size of the largest cluster.
+        """
+        clusters = self.identify_clusters(lifeform_id)
+        if clusters:
+            return max(len(cluster) for cluster in clusters)
+        else:
+            return 0
+
+    def identify_clusters(self, lifeform_id):
+        """
+        Identify clusters of connected cells for the lifeform.
+
+        Args:
+            lifeform_id (int): The ID of the lifeform.
+
+        Returns:
+            list of set: A list where each element is a set of connected cells forming a cluster.
+        """
+        visited = set()
+        clusters = []
+
+        for cell in self.cells.values():
+            if cell.alive and cell.lifeform_id == lifeform_id and cell not in visited:
+                cluster = set()
+                self.dfs_iterative(cell, lifeform_id, visited, cluster)
+                clusters.append(cluster)
+        return clusters
+
+    def dfs_iterative(self, start_cell, lifeform_id, visited, cluster):
+        """
+        Iterative depth-first search to identify connected cells.
+
+        Args:
+            start_cell (HexagonCell): The starting cell for DFS.
+            lifeform_id (int): The ID of the lifeform.
+            visited (set): Set of already visited cells.
+            cluster (set): Set to accumulate connected cells.
+        """
+        stack = [start_cell]
+        while stack:
+            cell = stack.pop()
+            if cell not in visited:
+                visited.add(cell)
+                cluster.add(cell)
+                for neighbor in cell.neighbors:
+                    if neighbor.alive and neighbor.lifeform_id == lifeform_id and neighbor not in visited:
+                        stack.append(neighbor)
+
+    def calculate_entropy(self, lifeform_id):
+        """
+        Calculate the entropy of the spatial distribution of the lifeform's cells.
+
+        Args:
+            lifeform_id (int): The ID of the lifeform.
+
+        Returns:
+            float: The entropy value.
+        """
+        positions = [(cell.q, cell.r) for cell in self.cells.values() if cell.alive and cell.lifeform_id == lifeform_id]
+        if not positions:
+            return 0
+        qs, rs = zip(*positions)
+        mean_q = sum(qs) / len(qs)
+        mean_r = sum(rs) / len(rs)
+        variance_q = sum((q - mean_q) ** 2 for q in qs) / len(qs)
+        variance_r = sum((r - mean_r) ** 2 for r in rs) / len(rs)
+        entropy = (variance_q + variance_r) ** 0.5
+        return entropy
+
+    def calculate_pattern_diversity(self, lifeform_id):
+        """
+        Calculate the diversity of patterns for the lifeform.
+
+        Args:
+            lifeform_id (int): The ID of the lifeform.
+
+        Returns:
+            int: The number of distinct patterns.
+        """
+        clusters = self.identify_clusters(lifeform_id)
+        pattern_set = set()
+        for cluster in clusters:
+            pattern = frozenset((cell.q, cell.r) for cell in cluster)
+            pattern_set.add(pattern)
+        return len(pattern_set)
+
+    def handle_click(self, pos):
+        """
+        Handle a mouse click event to toggle a cell's state.
+
+        Args:
+            pos (tuple): (x, y) pixel coordinates of the click.
+        """
+        x, y = pos
+        for cell in self.cells.values():
+            if self.point_in_polygon(x, y, cell.get_corners(self.offset_x, self.offset_y)):
+                if cell.alive:
+                    # Toggle to dead
+                    cell.alive = False
+                    cell.lifeform_id = None
+                    cell.alive_duration = 0
+                else:
+                    # Toggle to alive with a random lifeform
+                    if self.lifeforms:
+                        cell.lifeform_id = random.choice(self.lifeforms).id
+                    else:
+                        cell.lifeform_id = 1  # Default lifeform ID
+                    cell.alive = True
+                    cell.alive_duration = 1
+                break
+
+    @staticmethod
+    def point_in_polygon(x, y, polygon):
+        """
+        Determine if a point is inside a polygon using the ray casting algorithm.
+
+        Args:
+            x (float): X-coordinate of the point.
+            y (float): Y-coordinate of the point.
+            polygon (list): List of (x, y) tuples representing the polygon corners.
+
+        Returns:
+            bool: True if the point is inside the polygon, False otherwise.
+        """
+        num = len(polygon)
+        inside = False
+
+        p1x, p1y = polygon[0]
+        for i in range(num + 1):
+            p2x, p2y = polygon[i % num]
+            if y > min(p1y, p2y):
+                if y <= max(p1y, p2y):
+                    if x <= max(p1x, p2x):
+                        if p1y != p2y:
+                            xints = (y - p1y) * (p2x - p1x) / (p2y - p1y + 1e-6) + p1x  # Prevent division by zero
+                        else:
+                            xints = p1x
+                        if p1x == p2x or x <= xints:
+                            inside = not inside
+            p1x, p1y = p2x, p2y
+
+        return inside
+
+
+Script: lifeform.py
+from settings import LIFEFORM_COLORS_ALIVE, LIFEFORM_COLORS_STATIC
+
+class Lifeform:
+    """
+    Represents a single lifeform with its own rules and colors.
+    """
+    def __init__(self, lifeform_id, birth_rules, survival_rules):
+        """
+        Initialize a Lifeform.
+
+        Args:
+            lifeform_id (int): Unique identifier for the lifeform (1-10).
+            birth_rules (list): List of neighbor counts for a dead cell to become alive.
+            survival_rules (list): List of neighbor counts for a live cell to survive.
+        """
+        self.id = lifeform_id
+        self.birth_rules = birth_rules
+        self.survival_rules = survival_rules
+        self.color_alive = LIFEFORM_COLORS_ALIVE[lifeform_id - 1]
+        self.color_static = LIFEFORM_COLORS_STATIC[lifeform_id - 1]
+
+Script: main.py
+# main.py
+
+from game import GameOfLife
+
+if __name__ == '__main__':
+    game = GameOfLife()
+    game.run()
+  
+
+Script: settings.py
+# settings.py
+
+# Window settings
+WINDOW_WIDTH = 1200
+WINDOW_HEIGHT = 800
+FPS = 30  # Default FPS
+
+# Grid settings
+#GRID_SIZE = 'extra_large'  # Options: 'small', 'medium', 'large', 'extra_large'
+DEFAULT_SHAPE = 'triangle'  # Options: 'triangle', 'square', 'hexagon'
+
+# Cell settings
+CELL_SIZE_TRIANGLE = 8  # Size for triangular cells
+CELL_SIZE_SQUARE = 4     # Size for square cells
+CELL_SIZE_HEXAGON = 3     # Size for hexagonal cells
+
+# Game rules (default rules)
+DEFAULT_BIRTH_RULES = [5, 6]        # Adjusted as needed for triangle grid
+DEFAULT_SURVIVAL_RULES = [4, 5, 6]  # Adjusted as needed for triangle grid
+
+# Colors (RGB tuples)
+BACKGROUND_COLOR = (25, 25, 30)
+LIVE_CELL_COLOR = (0, 200, 150)
+DEAD_CELL_COLOR = (45, 45, 50)
+GRID_LINE_COLOR = (60, 60, 65)
+TEXT_COLOR = (240, 240, 240)
+PANEL_BACKGROUND_COLOR = (35, 35, 40)
+BUTTON_COLOR = (70, 130, 180)
+BUTTON_HOVER_COLOR = (100, 160, 210)
+SCROLLBAR_COLOR = (80, 80, 85)
+SCROLLBAR_HANDLE_COLOR = (120, 120, 125)
+
+# Fonts
+FONT_NAME = 'Arial'
+FONT_SIZE = 12
+
+# Default initial alive percentage
+DEFAULT_INITIAL_ALIVE_PERCENTAGE = 50  # Percentage (0 to 100)
+
+# Lifeform Colors (RGB tuples)
+LIFEFORM_COLORS_ALIVE = [
+    (220, 100, 100),  # Soft Red
+    (100, 220, 100),  # Soft Green
+    (150, 75, 75),    # Soft Brown
+    (230, 230, 100),  # Muted Yellow
+    (245, 180, 110),  # Soft Orange
+    (150, 100, 180),  # Lavender
+    (120, 200, 200),  # Soft Cyan
+    (255, 182, 193),  # Light Pink
+    (180, 180, 180),  # Light Gray
+    (100, 140, 180),  # Muted Blue
+]
+
+# Define colors for static cells
+LIFEFORM_COLORS_STATIC = [
+    (245, 245, 245),  # Off-White
+    (220, 220, 220),  # Very Light Gray
+    (180, 180, 180),  # Light Gray
+    (130, 130, 130),  # Medium Gray
+    (90, 90, 90),     # Darker Gray
+    (30, 30, 30),     # Very Dark Gray
+    (150, 150, 90),   # Muted Olive
+    (120, 90, 150),   # Muted Purple
+    (90, 150, 150),   # Muted Teal
+    (220, 180, 60),   # Muted Gold
+]
+
+# Left panel settings
+LEFT_PANEL_WIDTH = 300  # Adjust as needed based on your UI design
+
+
+Script: settings_panel.py
+# settings_panel.py
+
+import pygame
+from settings import (
+    TEXT_COLOR,
+    PANEL_BACKGROUND_COLOR,
+    FONT_NAME,
+    FONT_SIZE,
+    BUTTON_COLOR,
+    BUTTON_HOVER_COLOR,
+    SCROLLBAR_COLOR,
+    SCROLLBAR_HANDLE_COLOR,
+)
+from lifeform import Lifeform
+
+class Slider:
+    """
+    Represents a slider UI element.
+    """
+    def __init__(self, label, min_val, max_val, current_val, x, y, width, height, font, callback=None):
+        self.label = label
+        self.min = min_val
+        self.max = max_val
+        self.value = current_val
+        self.rect = pygame.Rect(x, y, width, height)
+        self.handle_radius = height // 2
+        self.handle_x = self.get_handle_position()
+        self.handle_y = y + height // 2
+        self.dragging = False
+        self.font = font
+        self.callback = callback  # Function to call when value changes
+
+    def get_handle_position(self):
+        """
+        Calculate the x-position of the slider handle based on current value.
+        """
+        proportion = (self.value - self.min) / (self.max - self.min)
+        return self.rect.x + int(proportion * self.rect.width)
+
+    def handle_event(self, event):
+        """
+        Handle events related to the slider.
+        """
+        if event.type == pygame.MOUSEBUTTONDOWN:
+            if event.button == 1:
+                mouse_x, mouse_y = event.pos
+                distance = ((mouse_x - self.handle_x) ** 2 + (mouse_y - self.handle_y) ** 2) ** 0.5
+                if distance <= self.handle_radius:
+                    self.dragging = True
+        elif event.type == pygame.MOUSEBUTTONUP:
+            if event.button == 1:
+                self.dragging = False
+        elif event.type == pygame.MOUSEMOTION:
+            if self.dragging:
+                mouse_x, _ = event.pos
+                # Clamp handle position within the slider track
+                self.handle_x = max(self.rect.x, min(mouse_x, self.rect.x + self.rect.width))
+                # Update value based on handle position
+                proportion = (self.handle_x - self.rect.x) / self.rect.width
+                self.value = int(self.min + proportion * (self.max - self.min))
+                if self.callback:
+                    self.callback(self.value)
+
+    def draw(self, surface):
+        """
+        Draw the slider on the given surface.
+        """
+        # Draw label above the slider
+        label_surf = self.font.render(f"{self.label}", True, TEXT_COLOR)
+        label_rect = label_surf.get_rect(midtop=(self.rect.centerx, self.rect.y - 20))
+        surface.blit(label_surf, label_rect)
+
+        # Draw current value below the slider
+        value_surf = self.font.render(f"{self.value}", True, TEXT_COLOR)
+        value_rect = value_surf.get_rect(midtop=(self.rect.centerx, self.rect.y + self.rect.height + 5))
+        surface.blit(value_surf, value_rect)
+
+        # Draw slider track
+        pygame.draw.rect(surface, SCROLLBAR_COLOR, self.rect)
+
+        # Draw slider handle
+        pygame.draw.circle(surface, BUTTON_COLOR, (self.handle_x, self.handle_y), self.handle_radius)
+        pygame.draw.circle(surface, TEXT_COLOR, (self.handle_x, self.handle_y), self.handle_radius, 2)
+
+
+class SettingsPanel:
+    """
+    Manages the settings panel for adjusting game variables with improved UI elements.
+    """
+
+    def __init__(self, game):
+        self.game = game
+        self.font = pygame.font.SysFont(FONT_NAME, FONT_SIZE)
+        self.active_box = None
+        self.setup_panel()
+
+        # Scrollbar attributes
+        self.scroll_y = 0
+        self.scroll_speed = 20  # Pixels per scroll event
+        self.is_dragging = False
+        self.drag_start_y = 0
+        self.scrollbar_rect = None
+        self.handle_rect = None
+        self.handle_height = 0
+
+        # Initialize content and visible heights
+        self.content_height = 0
+        self.visible_height = 0
+
+        # Track hovered button for tooltips
+        self.hovered_button = None
+
+    def setup_panel(self):
+        """
+        Initialize input values and labels for the settings panel.
+        """
+        self.sliders = {
+            'Initial Alive Percentage': {
+                'min': 0,
+                'max': 100,
+                'value': int(self.game.initial_alive_percentage * 100),
+                'callback': self.update_initial_alive_percentage
+            },
+            'Simulation Speed (FPS)': {
+                'min': 1,
+                'max': 60,
+                'value': self.game.fps,
+                'callback': self.update_simulation_speed
+            },
+            'Number of Lifeforms': {
+                'min': 1,
+                'max': 10,
+                'value': self.game.number_of_lifeforms,
+                'callback': self.update_number_of_lifeforms
+            },
+            'Grid Width': {  # New slider for grid width
+                'min': 10,
+                'max': 400,
+                'value': self.game.grid_width,
+                'callback': self.update_grid_width
+            },
+            'Grid Height': {  # New slider for grid height
+                'min': 10,
+                'max': 200,
+                'value': self.game.grid_height,
+                'callback': self.update_grid_height
+            },
+            'Number of Generations': {  # For auto-run
+                'min': 1,
+                'max': 1000,
+                'value': self.game.auto_run_generations,
+                'callback': self.update_number_of_generations
+            }
+        }
+
+        self.selections = {
+            'Grid Shape': {
+                'options': ['triangle', 'square', 'hexagon'],
+                'selected': self.game.shape,
+                'rect': None
+            }
+        }
+
+        self.buttons = {
+            'Apply': None,                # Rect will be set during drawing
+            'Randomise Lifeforms': None,  # Rect will be set during drawing
+            'Auto Run': None              # Rect for Auto Run button
+        }
+
+        # Add inputs for lifeform rules
+        self.lifeform_rules = {}
+        for idx in range(1, 11):  # For up to 10 lifeforms
+            self.lifeform_rules[idx] = {
+                'birth_rules': ','.join(map(str, self.game.lifeforms[idx-1].birth_rules)) if idx <= len(self.game.lifeforms) else '',
+                'survival_rules': ','.join(map(str, self.game.lifeforms[idx-1].survival_rules)) if idx <= len(self.game.lifeforms) else '',
+                'birth_rect': None,
+                'survival_rect': None
+            }
+
+    def update_initial_alive_percentage(self, value):
+        """
+        Update the initial alive percentage in the game.
+        """
+        self.game.initial_alive_percentage = value / 100.0
+
+    def update_simulation_speed(self, value):
+        """
+        Update the simulation speed (FPS) in the game.
+        """
+        self.game.fps = value
+
+    def update_number_of_lifeforms(self, value):
+        """
+        Update the number of lifeforms in the game.
+        """
+        self.game.number_of_lifeforms = value
+        # Regenerate lifeforms to match the new count
+        self.game.randomise_lifeforms()
+        self.game.create_grid()
+
+    def update_grid_width(self, value):
+        """
+        Update the grid width in the game.
+        """
+        self.game.grid_width = value
+        self.game.create_grid()
+
+    def update_grid_height(self, value):
+        """
+        Update the grid height in the game.
+        """
+        self.game.grid_height = value
+        self.game.create_grid()
+
+    def update_number_of_generations(self, value):
+        """
+        Update the number of generations for auto-run.
+        """
+        self.game.auto_run_generations = value
+
+    def handle_event(self, event):
+        """
+        Handle events specific to the settings panel, including sliders and buttons.
+        """
+        if event.type == pygame.MOUSEBUTTONDOWN:
+            if event.button == 1:  # Left click
+                pos = event.pos
+                # Check if clicking on any selection box
+                for key, data in self.selections.items():
+                    if data['rect'] and data['rect'].collidepoint(pos):
+                        # Cycle through options
+                        current_index = data['options'].index(data['selected'])
+                        next_index = (current_index + 1) % len(data['options'])
+                        data['selected'] = data['options'][next_index]
+                        # Update the game setting
+                        self.game.shape = data['selected']
+                        self.game.create_grid()
+                # Check if any button is clicked
+                for key, rect in self.buttons.items():
+                    if rect and rect.collidepoint(pos):
+                        if key == 'Apply':
+                            self.apply_settings()
+                        elif key == 'Randomise Lifeforms':
+                            self.randomise_lifeforms()
+                        elif key == 'Auto Run':
+                            self.auto_run()
+                        break
+            elif event.button == 4:  # Scroll up
+                self.scroll_y -= self.scroll_speed
+                self.scroll_y = max(0, self.scroll_y)
+                self.update_scrollbar()
+            elif event.button == 5:  # Scroll down
+                self.scroll_y += self.scroll_speed
+                self.scroll_y = min(self.scroll_y, self.get_max_scroll())
+                self.update_scrollbar()
+
+        elif event.type == pygame.MOUSEBUTTONUP:
+            if event.button == 1:
+                self.is_dragging = False
+
+        elif event.type == pygame.MOUSEMOTION:
+            if self.is_dragging and self.handle_rect:
+                mouse_y = event.pos[1]
+                delta_y = mouse_y - self.drag_start_y
+                self.drag_start_y = mouse_y
+                max_scroll = self.get_max_scroll()
+                self.scroll_y += delta_y * (self.content_height / self.scrollbar_rect.height)
+                self.scroll_y = max(0, min(self.scroll_y, max_scroll))
+                self.update_scrollbar()
+
+        elif event.type == pygame.MOUSEWHEEL:
+            # Handle scrolling with mouse wheel
+            self.scroll_y -= event.y * self.scroll_speed
+            self.scroll_y = max(0, min(self.scroll_y, self.get_max_scroll()))
+            self.update_scrollbar()
+
+        # Pass events to sliders
+        for label, slider_info in self.sliders.items():
+            slider_obj = getattr(self, f"slider_{label.replace(' ', '_')}", None)
+            if slider_obj:
+                slider_obj.handle_event(event)
+
+    def apply_settings(self):
+        """
+        Apply the settings from the input fields to the game.
+        """
+        # Update lifeform rules from input fields
+        for idx, rules in self.lifeform_rules.items():
+            birth_input = rules['birth_rules']
+            survival_input = rules['survival_rules']
+
+            try:
+                birth_rules = [int(num.strip()) for num in birth_input.split(',') if num.strip().isdigit()]
+                survival_rules = [int(num.strip()) for num in survival_input.split(',') if num.strip().isdigit()]
+            except ValueError:
+                # If parsing fails, default to empty rules
+                birth_rules = []
+                survival_rules = []
+
+            # Ensure unique lifeform IDs and existence
+            if idx <= len(self.game.lifeforms):
+                lifeform = self.game.lifeforms[idx - 1]
+                lifeform.birth_rules = sorted(birth_rules)
+                lifeform.survival_rules = sorted(survival_rules)
+            else:
+                # Create new lifeform if it doesn't exist
+                lifeform = Lifeform(lifeform_id=idx, birth_rules=birth_rules, survival_rules=survival_rules)
+                self.game.lifeforms.append(lifeform)
+
+        # Apply settings to the game
+        self.game.update_settings()
+
+    def randomise_lifeforms(self):
+        """
+        Randomize lifeform profiles by generating new ones.
+        """
+        self.game.randomise_lifeforms()
+        self.update_lifeform_rules()
+        self.game.create_grid()
+
+    def auto_run(self):
+        """
+        Trigger the auto-run mode in the game.
+        """
+        num_sessions = 1  # You can modify this to allow user input
+        if num_sessions >= 1:
+            self.game.start_auto_run(num_sessions)
+
+    def update_lifeform_rules(self):
+        """
+        Update the lifeform rule inputs based on the game's lifeforms.
+        """
+        for idx, lifeform in enumerate(self.game.lifeforms, start=1):
+            if idx > 10:
+                break  # Limit to 10 lifeforms
+            if idx in self.lifeform_rules:
+                self.lifeform_rules[idx]['birth_rules'] = ','.join(map(str, lifeform.birth_rules))
+                self.lifeform_rules[idx]['survival_rules'] = ','.join(map(str, lifeform.survival_rules))
+
+    def get_max_scroll(self):
+        """
+        Calculate the maximum scroll offset based on content height and visible height.
+        """
+        return max(self.content_height - self.visible_height, 0)
+
+    def update_scrollbar(self):
+        """
+        Update the scrollbar handle based on the current scroll position.
+        """
+        if self.content_height <= self.visible_height:
+            # No need for scrollbar
+            self.handle_rect = None
+            return
+
+        # Calculate handle size proportionally
+        track_height = self.scrollbar_rect.height
+        self.handle_height = max(int(track_height * self.visible_height / self.content_height), 20)
+
+        # Calculate handle position proportionally
+        max_scroll = self.get_max_scroll()
+        proportion = self.scroll_y / max_scroll if max_scroll > 0 else 0
+        handle_y = self.scrollbar_rect.y + int(proportion * (track_height - self.handle_height))
+        self.handle_rect = pygame.Rect(
+            self.scrollbar_rect.x,
+            handle_y,
+            self.scrollbar_rect.width,
+            self.handle_height
+        )
+
+    def draw(self, surface, x, y, width):
+        """
+        Draw the settings panel within the left panel with improved UI.
+
+        Args:
+            surface (pygame.Surface): The surface to draw on.
+            x (int): The x-coordinate to start drawing.
+            y (int): The y-coordinate to start drawing.
+            width (int): The width of the area to draw in.
+        """
+        # Define the visible area for the settings panel
+        self.visible_height = surface.get_height() - y  # Assuming y is the top margin
+        self.content_height = 0  # Will calculate as we draw
+
+        # Define padding at the top
+        padding_top = 20  # Adjust this value as needed
+
+        # Define scrollbar properties
+        scrollbar_width = 15
+        self.scrollbar_rect = pygame.Rect(x + width - scrollbar_width, y, scrollbar_width, self.visible_height)
+
+        # Enable clipping to the visible area
+        surface.set_clip(pygame.Rect(x, y, width - scrollbar_width, self.visible_height))
+
+        # Start drawing content with scroll offset and padding
+        current_y = y - self.scroll_y + padding_top
+        self.content_height = padding_top  # Initialize content_height with padding
+
+        line_height = 25
+        spacing = 10
+
+        # Draw Sliders
+        for label, slider_info in self.sliders.items():
+            # Create Slider instance if not already created
+            slider_obj = getattr(self, f"slider_{label.replace(' ', '_')}", None)
+            if not slider_obj:
+                slider_obj = Slider(
+                    label=label,
+                    min_val=slider_info['min'],
+                    max_val=slider_info['max'],
+                    current_val=slider_info['value'],
+                    x=x + 10,
+                    y=current_y,
+                    width=width - 40,
+                    height=15,
+                    font=self.font,
+                    callback=slider_info['callback']
+                )
+                setattr(self, f"slider_{label.replace(' ', '_')}", slider_obj)
+
+            slider_obj.rect.y = current_y  # Update y-position based on scroll
+            slider_obj.handle_y = current_y + slider_obj.handle_radius
+            slider_obj.handle_x = slider_obj.get_handle_position()
+            slider_obj.draw(surface)
+            current_y += 60
+            self.content_height += 60
+
+        # Draw Selection Fields
+        for label, data in self.selections.items():
+            # Draw label
+            label_surf = self.font.render(label, True, TEXT_COLOR)
+            surface.blit(label_surf, (x + 10, current_y))
+            current_y += line_height
+
+            # Draw selection box
+            selection_rect = pygame.Rect(
+                x + 10,
+                current_y,
+                width - 40,
+                line_height + 10
+            )
+            data['rect'] = selection_rect  # Update the rect in data for event handling
+            pygame.draw.rect(surface, BUTTON_COLOR, selection_rect)
+            pygame.draw.rect(surface, TEXT_COLOR, selection_rect, 2)
+
+            # Draw selected option
+            selected_text = self.font.render(data['selected'], True, TEXT_COLOR)
+            surface.blit(selected_text, (selection_rect.x + 10, selection_rect.y + 5))
+
+            current_y += line_height + 20
+            self.content_height += line_height + 20
+
+        # Draw Buttons with hover effect
+        button_height = 30
+        button_spacing = 15
+        for key in self.buttons.keys():
+            rect = pygame.Rect(
+                x + 10,
+                current_y,
+                width - 40,
+                button_height
+            )
+            self.buttons[key] = rect  # Update rect based on current_y
+
+            # Check hover state
+            mouse_pos = pygame.mouse.get_pos()
+            if rect.collidepoint(mouse_pos):
+                color = BUTTON_HOVER_COLOR
+                self.hovered_button = key
+            else:
+                color = BUTTON_COLOR
+
+            # Draw button
+            pygame.draw.rect(surface, color, rect, border_radius=5)
+            pygame.draw.rect(surface, TEXT_COLOR, rect, 2, border_radius=5)
+
+            # Draw button text
+            button_text = self.font.render(key, True, TEXT_COLOR)
+            text_rect = button_text.get_rect(center=rect.center)
+            surface.blit(button_text, text_rect)
+
+            current_y += button_height + button_spacing
+            self.content_height += button_height + button_spacing
+
+        # Draw Lifeform Rules Inputs
+        current_y += 10  # Add some spacing before lifeform rules
+        self.content_height += 10
+        for lifeform_id, rules in self.lifeform_rules.items():
+            # Lifeform Header
+            lf_header = self.font.render(f'Lifeform {lifeform_id} Rules', True, TEXT_COLOR)
+            surface.blit(lf_header, (x + 10, current_y))
+            current_y += line_height + 5
+            self.content_height += line_height + 5
+
+            # Birth Rules Input
+            label_text = self.font.render('  Birth Rules (e.g., 3,6)', True, TEXT_COLOR)
+            surface.blit(label_text, (x + 10, current_y))
+            current_y += line_height
+
+            birth_rect = pygame.Rect(
+                x + 20,
+                current_y,
+                width - 60,
+                line_height + 10
+            )
+            rules['birth_rect'] = birth_rect
+
+            # Draw birth rules input box
+            pygame.draw.rect(surface, BUTTON_COLOR, birth_rect)
+            pygame.draw.rect(surface, TEXT_COLOR, birth_rect, 2)
+
+            # Render birth rules text
+            birth_text = self.font.render(rules['birth_rules'], True, TEXT_COLOR)
+            surface.blit(birth_text, (birth_rect.x + 10, birth_rect.y + 5))
+
+            current_y += line_height + 20
+            self.content_height += line_height + 20
+
+            # Survival Rules Input
+            label_text = self.font.render('  Survival Rules (e.g., 2,3)', True, TEXT_COLOR)
+            surface.blit(label_text, (x + 10, current_y))
+            current_y += line_height
+
+            survival_rect = pygame.Rect(
+                x + 20,
+                current_y,
+                width - 60,
+                line_height + 10
+            )
+            rules['survival_rect'] = survival_rect
+
+            # Draw survival rules input box
+            pygame.draw.rect(surface, BUTTON_COLOR, survival_rect)
+            pygame.draw.rect(surface, TEXT_COLOR, survival_rect, 2)
+
+            # Render survival rules text
+            survival_text = self.font.render(rules['survival_rules'], True, TEXT_COLOR)
+            surface.blit(survival_text, (survival_rect.x + 10, survival_rect.y + 5))
+
+            current_y += line_height + 20
+            self.content_height += line_height + 20
+
+        # Remove clipping
+        surface.set_clip(None)
+
+        # Calculate scrollbar handle
+        self.update_scrollbar()
+
+        # Draw scrollbar background
+        pygame.draw.rect(surface, SCROLLBAR_COLOR, self.scrollbar_rect)
+        # Draw scrollbar handle
+        if self.handle_rect:
+            pygame.draw.rect(surface, SCROLLBAR_HANDLE_COLOR, self.handle_rect)
+
+    def update_lifeform_rules(self):
+        """
+        Update the lifeform rule inputs based on the game's lifeforms.
+        """
+        for idx, lifeform in enumerate(self.game.lifeforms, start=1):
+            if idx > 10:
+                break  # Limit to 10 lifeforms
+            if idx in self.lifeform_rules:
+                self.lifeform_rules[idx]['birth_rules'] = ','.join(map(str, lifeform.birth_rules))
+                self.lifeform_rules[idx]['survival_rules'] = ','.join(map(str, lifeform.survival_rules))
+
+
+Script: species_database.py
+# species_database.py
+
+import sqlite3
+import random
+
+import itertools
+
+def generate_species():
+    species_list = []
+    neighbor_counts = range(9)  # Neighbor counts from 0 to 8
+
+    # Generate all possible birth rule combinations
+    birth_rule_combinations = []
+    for i in range(512):  # 2^9 possible combinations
+        birth_rule = [int(bit) for bit in bin(i)[2:].zfill(9)]
+        birth_rule_combinations.append([idx for idx, bit in enumerate(birth_rule) if bit])
+
+    # Generate all possible survival rule combinations (same as birth rules)
+    survival_rule_combinations = birth_rule_combinations.copy()
+
+    # Generate all possible species combinations
+    for birth_rules in birth_rule_combinations:
+        for survival_rules in survival_rule_combinations:
+            # Create a unique name or identifier for the species
+            birth_bits = ''.join(['1' if i in birth_rules else '0' for i in range(9)])
+            survival_bits = ''.join(['1' if i in survival_rules else '0' for i in range(9)])
+            species_name = birth_bits + survival_bits
+
+            species_list.append((
+                species_name,
+                ','.join(map(str, birth_rules)),
+                ','.join(map(str, survival_rules))
+            ))
+
+    return species_list
+
+def create_species_database():
+    """
+    Creates a SQLite database with species.
+    """
+    conn = sqlite3.connect('species.db')
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS species (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE,
+            birth_rules TEXT,
+            survival_rules TEXT
+        )
+    ''')
+
+    # Generate species
+    species_list = generate_species()
+
+    # Insert species into the database
+    c.executemany('''
+        INSERT OR IGNORE INTO species (name, birth_rules, survival_rules)
+        VALUES (?, ?, ?)
+    ''', species_list)
+
+    conn.commit()
+    conn.close()
+
+if __name__ == '__main__':
+    create_species_database()
+
+
+Script: square_cell.py
+# square_cell.py
+
+import pygame
+from settings import DEAD_CELL_COLOR, GRID_LINE_COLOR
+
+class SquareCell:
+    """
+    Represents a single square cell in the grid.
+    """
+
+    def __init__(self, x, y, size, alive=False, lifeform_id=None):
+        """
+        Initialize a square cell.
+
+        Args:
+            x (int): Grid coordinate x.
+            y (int): Grid coordinate y.
+            size (int): Size of the square cell.
+            alive (bool): State of the cell, alive or dead.
+            lifeform_id (int or None): Identifier of the lifeform the cell belongs to.
+        """
+        self.x = x
+        self.y = y
+        self.size = size
+        self.alive = alive
+        self.neighbors = []
+        self.alive_duration = 0  # Number of consecutive generations the cell has been alive
+        self.lifeform_id = lifeform_id  # Lifeform identifier
+
+    def get_position(self, offset_x, offset_y):
+        """
+        Calculate the pixel position of the square cell.
+        """
+        x = self.x * self.size
+        y = self.y * self.size
+        return (x + offset_x, y + offset_y)
+
+    def draw(self, surface, offset_x, offset_y, lifeform=None):
+        """
+        Draw the square cell on the given surface.
+
+        Args:
+            surface (pygame.Surface): The surface to draw on.
+            offset_x (int): Horizontal offset for rendering.
+            offset_y (int): Vertical offset for rendering.
+            lifeform (Lifeform or None): The lifeform object associated with this cell.
+        """
+        # Determine the color based on lifeform and alive_duration
+        if self.alive:
+            if self.alive_duration > 10 and lifeform:
+                color = lifeform.color_static
+            elif lifeform:
+                color = lifeform.color_alive
+            else:
+                color = DEAD_CELL_COLOR
+        else:
+            color = DEAD_CELL_COLOR
+
+        rect = pygame.Rect(
+            self.get_position(offset_x, offset_y),
+            (self.size, self.size)
+        )
+        pygame.draw.rect(surface, color, rect)
+        # Optional: Draw grid lines for better visibility
+        pygame.draw.rect(surface, GRID_LINE_COLOR, rect, 1)
+
+    def __hash__(self):
+        return hash((self.x, self.y))
+
+    def __eq__(self, other):
+        return isinstance(other, SquareCell) and self.x == other.x and self.y == other.y
+
+
+Script: square_grid.py
+# square_grid.py
+
+import pygame
+from square_cell import SquareCell
+from lifeform import Lifeform
+import random
+
+class SquareGrid:
+    """
+    Manages the square grid and cell states for multiple lifeforms.
+    """
+
+    def __init__(self, lifeforms=None, initial_alive_percentage=0.5,
+                 grid_width=50, grid_height=50, available_width=None, available_height=None):
+        """
+        Initialize the square grid based on the specified grid size and lifeforms.
+
+        Args:
+            lifeforms (list of Lifeform): List of lifeforms operating on the grid.
+            initial_alive_percentage (float): The percentage of cells to be alive initially (between 0 and 1).
+            grid_width (int): Number of cells in the horizontal direction.
+            grid_height (int): Number of cells in the vertical direction.
+            available_width (int or float): Available screen width for the grid.
+            available_height (int or float): Available screen height for the grid.
+        """
+        self.cells = {}
+        self.offset_x = 0
+        self.offset_y = 0
+        self.cell_size = None  # Will be calculated
+        self.lifeforms = lifeforms if lifeforms else []
+        self.initial_alive_percentage = initial_alive_percentage
+        self.generation = 0
+        self.grid_width = grid_width
+        self.grid_height = grid_height
+        self.available_width = available_width
+        self.available_height = available_height
+        self.create_grid()
+
+    def calculate_offsets(self, start_x=0, start_y=0):
+        """
+        Calculate offsets to position the grid so that its top-left corner is at (start_x, start_y).
+
+        Args:
+            start_x (float): The x-coordinate where the grid's top-left corner should be positioned.
+            start_y (float): The y-coordinate where the grid's top-left corner should be positioned.
+        """
+        self.offset_x = start_x
+        self.offset_y = start_y
+
+    def create_grid(self):
+        """
+        Create the square grid of cells and distribute initial live cells among lifeforms.
+        """
+        # Calculate cell size based on available space and grid dimensions
+        if self.available_width and self.available_height:
+            cell_width = self.available_width / self.grid_width
+            cell_height = self.available_height / self.grid_height
+            self.cell_size = int(min(cell_width, cell_height))
+        else:
+            self.cell_size = 10  # Default cell size
+
+        # Create cells
+        for y in range(self.grid_height):
+            for x in range(self.grid_width):
+                cell = SquareCell(x, y, self.cell_size, alive=False, lifeform_id=None)
+                self.cells[(x, y)] = cell
+
+        total_cells = len(self.cells)
+        alive_cells_total = int(total_cells * self.initial_alive_percentage)
+        num_lifeforms = len(self.lifeforms) if self.lifeforms else 1
+        alive_cells_per_lifeform = max(alive_cells_total // num_lifeforms, 1)
+
+        # Assign alive cells to lifeforms
+        if self.lifeforms:
+            for lifeform in self.lifeforms:
+                assigned = 0
+                while assigned < alive_cells_per_lifeform:
+                    cell = random.choice(list(self.cells.values()))
+                    if not cell.alive:
+                        cell.alive = True
+                        cell.lifeform_id = lifeform.id
+                        cell.alive_duration = 1
+                        assigned += 1
+        else:
+            # Single lifeform scenario
+            for cell in self.cells.values():
+                if random.random() < self.initial_alive_percentage:
+                    cell.alive = True
+                    cell.lifeform_id = 1  # Default lifeform ID
+                    cell.alive_duration = 1
+
+        self.calculate_neighbors()
+
+    def calculate_neighbors(self):
+        """
+        Calculate and assign neighbors for each cell.
+        """
+        # Define neighbor offsets for squares
+        neighbor_offsets = [
+            (-1, -1), (0, -1), (1, -1),
+            (-1,  0),          (1,  0),
+            (-1,  1), (0,  1), (1,  1)
+        ]
+        for cell in self.cells.values():
+            neighbors = []
+            for dx, dy in neighbor_offsets:
+                neighbor_coord = (cell.x + dx, cell.y + dy)
+                neighbor = self.cells.get(neighbor_coord)
+                if neighbor:
+                    neighbors.append(neighbor)
+            cell.neighbors = neighbors
+
+    def draw(self, surface):
+        """
+        Draw all cells in the grid with appropriate colors based on lifeforms.
+
+        Args:
+            surface (pygame.Surface): The surface to draw on.
+        """
+        for cell in self.cells.values():
+            lifeform = self.get_lifeform_by_id(cell.lifeform_id)
+            cell.draw(surface, self.offset_x, self.offset_y, lifeform=lifeform)
+
+    def get_lifeform_by_id(self, lifeform_id):
+        """
+        Retrieve a Lifeform object by its ID.
+
+        Args:
+            lifeform_id (int or None): The ID of the lifeform.
+
+        Returns:
+            Lifeform or None: The corresponding Lifeform object or None if not found.
+        """
+        if lifeform_id is None:
+            return None
+        for lifeform in self.lifeforms:
+            if lifeform.id == lifeform_id:
+                return lifeform
+        return None
+
+    def update(self):
+        """
+        Update the grid to the next generation based on each lifeform's rules.
+
+        Returns:
+            tuple: A tuple containing the number of births, deaths, static cells,
+                   lifeform_alive_counts, lifeform_static_counts, lifeform_metrics.
+        """
+        new_states = {}
+        births = 0
+        deaths = 0
+        static_cells = 0
+
+        lifeform_static_counts = {lifeform.id: 0 for lifeform in self.lifeforms}
+        lifeform_alive_counts = {lifeform.id: 0 for lifeform in self.lifeforms}
+        lifeform_death_counts = {lifeform.id: 0 for lifeform in self.lifeforms}
+        lifeform_birth_counts = {lifeform.id: 0 for lifeform in self.lifeforms}
+        lifeform_lifespans = {lifeform.id: [] for lifeform in self.lifeforms}
+        previous_alive_counts = getattr(self, 'previous_alive_counts', {lifeform.id: 0 for lifeform in self.lifeforms})
+        lifeform_previous_positions = getattr(self, 'lifeform_previous_positions', {lifeform.id: set() for lifeform in self.lifeforms})
+        lifeform_current_positions = {lifeform.id: set() for lifeform in self.lifeforms}
+
+        # Record previous positions
+        for cell in self.cells.values():
+            if cell.alive:
+                lifeform_previous_positions[cell.lifeform_id].add((cell.x, cell.y))
+
+        for cell in self.cells.values():
+            if cell.lifeform_id is None:
+                # Dead cell: Check for possible births from any lifeform
+                possible_births = {}
+                for lifeform in self.lifeforms:
+                    live_neighbors = sum(1 for neighbor in cell.neighbors if neighbor.alive and neighbor.lifeform_id == lifeform.id)
+                    if live_neighbors in lifeform.birth_rules:
+                        possible_births[lifeform.id] = live_neighbors
+                if possible_births:
+                    # Randomly select one lifeform to birth the cell
+                    selected_lifeform_id = random.choice(list(possible_births.keys()))
+                    new_states[cell] = selected_lifeform_id  # Cell becomes alive with selected lifeform
+                    births += 1
+                    lifeform_birth_counts[selected_lifeform_id] += 1
+                else:
+                    new_states[cell] = None  # Remains dead
+            else:
+                # Live cell: Apply survival rules of its own lifeform
+                lifeform = self.get_lifeform_by_id(cell.lifeform_id)
+                if lifeform:
+                    live_neighbors = sum(1 for neighbor in cell.neighbors if neighbor.alive and neighbor.lifeform_id == lifeform.id)
+                    if live_neighbors in lifeform.survival_rules:
+                        new_states[cell] = lifeform.id  # Survives
+                    else:
+                        new_states[cell] = None  # Dies
+                        deaths += 1
+                        lifeform_death_counts[cell.lifeform_id] += 1
+                        # Record lifespan
+                        lifeform_lifespans[cell.lifeform_id].append(cell.alive_duration)
+                else:
+                    new_states[cell] = None  # Shouldn't happen
+
+        # Update cell states and alive_duration
+        for cell, new_lifeform_id in new_states.items():
+            if new_lifeform_id is not None:
+                if cell.alive:
+                    if cell.lifeform_id == new_lifeform_id:
+                        cell.alive_duration += 1
+                    else:
+                        # Record lifespan before changing lifeform
+                        lifeform_lifespans[cell.lifeform_id].append(cell.alive_duration)
+                        cell.lifeform_id = new_lifeform_id
+                        cell.alive_duration = 1
+                else:
+                    cell.alive = True
+                    cell.lifeform_id = new_lifeform_id
+                    cell.alive_duration = 1
+            else:
+                if cell.alive:
+                    # Record lifespan
+                    lifeform_lifespans[cell.lifeform_id].append(cell.alive_duration)
+                    cell.alive = False
+                    cell.lifeform_id = None
+                    cell.alive_duration = 0
+
+            # Count static cells and alive cells per lifeform
+            if cell.alive:
+                lifeform_alive_counts[cell.lifeform_id] += 1
+                lifeform_current_positions[cell.lifeform_id].add((cell.x, cell.y))
+                if cell.alive_duration > 10:
+                    static_cells += 1
+                    lifeform_static_counts[cell.lifeform_id] += 1
+
+        # Compute metrics for each lifeform
+        lifeform_metrics = {}
+        total_cells = len(self.cells)
+        total_alive_cells = sum(lifeform_alive_counts.values())
+        for lifeform in self.lifeforms:
+            lifeform_id = lifeform.id
+            metrics = {}
+
+            # Average Cluster Size for Static Lifeforms
+            metrics['average_cluster_size'] = self.calculate_average_cluster_size(lifeform_id)
+
+            # Growth Rate
+            previous_alive = previous_alive_counts.get(lifeform_id, 0)
+            current_alive = lifeform_alive_counts.get(lifeform_id, 0)
+            metrics['growth_rate'] = (current_alive - previous_alive) if self.generation > 0 else 0
+
+            # Death Rate
+            metrics['death_rate'] = lifeform_death_counts.get(lifeform_id, 0)
+
+            # Average Lifespan of Cells
+            lifespans = lifeform_lifespans.get(lifeform_id, [])
+            if lifespans:
+                metrics['average_lifespan'] = sum(lifespans) / len(lifespans)
+            else:
+                metrics['average_lifespan'] = 0
+
+            # Maximum Cluster Size
+            metrics['max_cluster_size'] = self.calculate_max_cluster_size(lifeform_id)
+
+            # Dominance Ratio
+            if total_alive_cells > 0:
+                metrics['dominance_ratio'] = current_alive / total_alive_cells
+            else:
+                metrics['dominance_ratio'] = 0
+
+            # Entropy (Spatial Distribution)
+            metrics['entropy'] = self.calculate_entropy(lifeform_id)
+
+            # Mobility
+            previous_positions = lifeform_previous_positions.get(lifeform_id, set())
+            current_positions = lifeform_current_positions.get(lifeform_id, set())
+            if previous_positions:
+                moved_cells = len(current_positions - previous_positions)
+                total_previous_cells = len(previous_positions)
+                metrics['mobility'] = moved_cells / total_previous_cells
+            else:
+                metrics['mobility'] = 0
+
+            # Diversity of Patterns
+            metrics['diversity'] = self.calculate_pattern_diversity(lifeform_id)
+
+            lifeform_metrics[lifeform_id] = metrics
+
+        # Save current alive counts and positions for the next generation
+        self.previous_alive_counts = lifeform_alive_counts.copy()
+        self.lifeform_previous_positions = lifeform_current_positions
+        self.generation += 1  # Increment generation for tracking growth rate
+
+        return births, deaths, static_cells, lifeform_alive_counts, lifeform_static_counts, lifeform_metrics
+
+    def calculate_average_cluster_size(self, lifeform_id):
+        """
+        Calculate the average cluster size for static lifeforms.
+
+        Args:
+            lifeform_id (int): The ID of the lifeform.
+
+        Returns:
+            float: The average cluster size.
+        """
+        clusters = self.identify_clusters(lifeform_id)
+        if clusters:
+            cluster_sizes = [len(cluster) for cluster in clusters]
+            return sum(cluster_sizes) / len(cluster_sizes)
+        else:
+            return 0
+
+    def calculate_max_cluster_size(self, lifeform_id):
+        """
+        Calculate the maximum cluster size for the lifeform.
+
+        Args:
+            lifeform_id (int): The ID of the lifeform.
+
+        Returns:
+            int: The size of the largest cluster.
+        """
+        clusters = self.identify_clusters(lifeform_id)
+        if clusters:
+            return max(len(cluster) for cluster in clusters)
+        else:
+            return 0
+
+    def identify_clusters(self, lifeform_id):
+        """
+        Identify clusters of connected cells for the lifeform.
+
+        Args:
+            lifeform_id (int): The ID of the lifeform.
+
+        Returns:
+            list of set: A list where each element is a set of connected cells forming a cluster.
+        """
+        visited = set()
+        clusters = []
+
+        for cell in self.cells.values():
+            if cell.alive and cell.lifeform_id == lifeform_id and cell not in visited:
+                cluster = set()
+                self.dfs_iterative(cell, lifeform_id, visited, cluster)
+                clusters.append(cluster)
+        return clusters
+
+    def dfs_iterative(self, start_cell, lifeform_id, visited, cluster):
+        """
+        Iterative depth-first search to identify connected cells.
+
+        Args:
+            start_cell (SquareCell): The starting cell for DFS.
+            lifeform_id (int): The ID of the lifeform.
+            visited (set): Set of already visited cells.
+            cluster (set): Set to accumulate connected cells.
+        """
+        stack = [start_cell]
+        while stack:
+            cell = stack.pop()
+            if cell not in visited:
+                visited.add(cell)
+                cluster.add(cell)
+                for neighbor in cell.neighbors:
+                    if neighbor.alive and neighbor.lifeform_id == lifeform_id and neighbor not in visited:
+                        stack.append(neighbor)
+
+    def calculate_entropy(self, lifeform_id):
+        """
+        Calculate the entropy of the spatial distribution of the lifeform's cells.
+
+        Args:
+            lifeform_id (int): The ID of the lifeform.
+
+        Returns:
+            float: The entropy value.
+        """
+        positions = [(cell.x, cell.y) for cell in self.cells.values() if cell.alive and cell.lifeform_id == lifeform_id]
+        if not positions:
+            return 0
+        xs, ys = zip(*positions)
+        mean_x = sum(xs) / len(xs)
+        mean_y = sum(ys) / len(ys)
+        variance_x = sum((x - mean_x) ** 2 for x in xs) / len(xs)
+        variance_y = sum((y - mean_y) ** 2 for y in ys) / len(ys)
+        entropy = (variance_x + variance_y) ** 0.5
+        return entropy
+
+    def calculate_pattern_diversity(self, lifeform_id):
+        """
+        Calculate the diversity of patterns for the lifeform.
+
+        Args:
+            lifeform_id (int): The ID of the lifeform.
+
+        Returns:
+            int: The number of distinct patterns.
+        """
+        clusters = self.identify_clusters(lifeform_id)
+        pattern_set = set()
+        for cluster in clusters:
+            pattern = frozenset((cell.x, cell.y) for cell in cluster)
+            pattern_set.add(pattern)
+        return len(pattern_set)
+
+    def handle_click(self, pos):
+        """
+        Handle a mouse click event to toggle a cell's state.
+
+        Args:
+            pos (tuple): (x, y) pixel coordinates of the click.
+        """
+        x, y = pos
+        for cell in self.cells.values():
+            x_cell, y_cell = cell.get_position(self.offset_x, self.offset_y)
+            rect = pygame.Rect(x_cell, y_cell, cell.size, cell.size)
+            if rect.collidepoint(x, y):
+                if cell.alive:
+                    # Toggle to dead
+                    cell.alive = False
+                    cell.lifeform_id = None
+                    cell.alive_duration = 0
+                else:
+                    # Toggle to alive with a random lifeform
+                    if self.lifeforms:
+                        cell.lifeform_id = random.choice(self.lifeforms).id
+                    else:
+                        cell.lifeform_id = 1  # Default lifeform ID
+                    cell.alive = True
+                    cell.alive_duration = 1
+                break
+
+    @staticmethod
+    def point_in_polygon(x, y, polygon):
+        """
+        Determine if a point is inside a polygon using the ray casting algorithm.
+
+        Args:
+            x (float): X-coordinate of the point.
+            y (float): Y-coordinate of the point.
+            polygon (list): List of (x, y) tuples representing the polygon corners.
+
+        Returns:
+            bool: True if the point is inside the polygon, False otherwise.
+        """
+        num = len(polygon)
+        inside = False
+
+        p1x, p1y = polygon[0]
+        for i in range(num + 1):
+            p2x, p2y = polygon[i % num]
+            if y > min(p1y, p2y):
+                if y <= max(p1y, p2y):
+                    if x <= max(p1x, p2x):
+                        if p1y != p2y:
+                            xints = (y - p1y) * (p2x - p1x) / (p2y - p1y + 1e-6) + p1x  # Prevent division by zero
+                        else:
+                            xints = p1x
+                        if p1x == p2x or x <= xints:
+                            inside = not inside
+            p1x, p1y = p2x, p2y
+
+        return inside
+
+
+Script: tooltip.py
+# tooltip.py
+
+import pygame
+from settings import TEXT_COLOR, BACKGROUND_COLOR, FONT_NAME, FONT_SIZE
+
+class Tooltip:
+    """
+    Displays tooltips for UI elements.
+    """
+    def __init__(self):
+        self.font = pygame.font.SysFont(FONT_NAME, FONT_SIZE)
+        self.text = ''
+        self.rect = None
+
+    def draw(self, surface, pos):
+        if self.text:
+            text_surf = self.font.render(self.text, True, TEXT_COLOR)
+            self.rect = text_surf.get_rect()
+            self.rect.topleft = (pos[0] + 10, pos[1] + 10)
+            pygame.draw.rect(surface, BACKGROUND_COLOR, self.rect.inflate(10, 10))
+            surface.blit(text_surf, self.rect)
+
+    def update(self, text):
+        self.text = text
+
+
+Script: triangle_cell.py
+# triangle_cell.py
+
+import pygame
+import math
+from settings import DEAD_CELL_COLOR, GRID_LINE_COLOR
+
+class TriangleCell:
+    """
+    Represents a single triangular cell in the grid.
+    """
+
+    def __init__(self, x, y, size, upward=True, alive=False, lifeform_id=None):
+        """
+        Initialize a triangle cell.
+
+        Args:
+            x (int): Grid coordinate x.
+            y (int): Grid coordinate y.
+            size (int): Size of the triangle cell.
+            upward (bool): Direction of the triangle (upward or downward).
+            alive (bool): State of the cell, alive or dead.
+            lifeform_id (int or None): Identifier of the lifeform the cell belongs to.
+        """
+        self.x = x
+        self.y = y
+        self.size = size
+        self.upward = upward
+        self.alive = alive
+        self.neighbors = []
+        self.alive_duration = 0  # Number of consecutive generations the cell has been alive
+        self.lifeform_id = lifeform_id  # Lifeform identifier
+
+    def get_position(self, offset_x, offset_y):
+        """
+        Calculate the pixel position of the triangle cell.
+        """
+        x = self.x * (self.size / 2)
+        y = self.y * (self.size * math.sqrt(3) / 2)
+        return (x + offset_x, y + offset_y)
+
+    def draw(self, surface, offset_x, offset_y, lifeform=None):
+        """
+        Draw the triangle cell on the given surface.
+
+        Args:
+            surface (pygame.Surface): The surface to draw on.
+            offset_x (int): Horizontal offset for rendering.
+            offset_y (int): Vertical offset for rendering.
+            lifeform (Lifeform or None): The lifeform object associated with this cell.
+        """
+        # Determine the color based on lifeform and alive_duration
+        if self.alive:
+            if self.alive_duration > 10 and lifeform:
+                color = lifeform.color_static
+            elif lifeform:
+                color = lifeform.color_alive
+            else:
+                color = DEAD_CELL_COLOR
+        else:
+            color = DEAD_CELL_COLOR
+
+        pygame.draw.polygon(surface, color, self.get_corners(offset_x, offset_y))
+        # Optional: Draw grid lines for better visibility
+        pygame.draw.polygon(surface, GRID_LINE_COLOR, self.get_corners(offset_x, offset_y), 1)
+
+    def get_corners(self, offset_x, offset_y):
+        """
+        Calculate the corner positions of the triangle cell.
+        """
+        x0, y0 = self.get_position(offset_x, offset_y)
+        half_size = self.size / 2
+        height = self.size * math.sqrt(3) / 2
+
+        if self.upward:
+            corners = [
+                (x0, y0 - height / 2),
+                (x0 - half_size, y0 + height / 2),
+                (x0 + half_size, y0 + height / 2)
+            ]
+        else:
+            corners = [
+                (x0, y0 + height / 2),
+                (x0 - half_size, y0 - height / 2),
+                (x0 + half_size, y0 - height / 2)
+            ]
+        return corners
+
+    def __hash__(self):
+        return hash((self.x, self.y))
+
+    def __eq__(self, other):
+        return isinstance(other, TriangleCell) and self.x == other.x and self.y == other.y
+
+
+Script: triangle_grid.py
+# triangle_grid.py
+
+import pygame
+from triangle_cell import TriangleCell
+from lifeform import Lifeform
+import random
+import math
+
+class TriangleGrid:
+    """
+    Manages the triangular grid and cell states for multiple lifeforms.
+    """
+    def __init__(self, lifeforms=None, initial_alive_percentage=0.5,
+                 grid_width=50, grid_height=50, available_width=None, available_height=None):
+        """
+        Initialize the triangle grid based on the specified grid size and lifeforms.
+
+        Args:
+            lifeforms (list of Lifeform): List of lifeforms operating on the grid.
+            initial_alive_percentage (float): The percentage of cells to be alive initially (between 0 and 1).
+            grid_width (int): Number of cells in the horizontal direction.
+            grid_height (int): Number of cells in the vertical direction.
+            available_width (int or float): Available screen width for the grid.
+            available_height (int or float): Available screen height for the grid.
+        """
+        self.cells = {}
+        self.offset_x = 0
+        self.offset_y = 0
+        self.cell_size = None  # Will be calculated
+        self.lifeforms = lifeforms if lifeforms else []
+        self.initial_alive_percentage = initial_alive_percentage
+        self.generation = 0
+        self.grid_width = grid_width
+        self.grid_height = grid_height
+        self.available_width = available_width
+        self.available_height = available_height
+        self.create_grid()
+
+    def calculate_offsets(self, start_x=0, start_y=0):
+        """
+        Calculate offsets to position the grid so that its top-left corner is at (start_x, start_y).
+
+        Args:
+            start_x (float): The x-coordinate where the grid's top-left corner should be positioned.
+            start_y (float): The y-coordinate where the grid's top-left corner should be positioned.
+        """
+        self.offset_x = start_x
+        self.offset_y = start_y
+
+    def create_grid(self):
+        """
+        Create the triangular grid of cells and distribute initial live cells among lifeforms.
+        """
+        # Calculate cell size based on available space and grid dimensions
+        if self.available_width and self.available_height:
+            cell_width = self.available_width / ((self.grid_width + 1) / 2)
+            cell_height = self.available_height / (self.grid_height * (math.sqrt(3) / 2))
+            self.cell_size = int(min(cell_width, cell_height))
+        else:
+            self.cell_size = 10  # Default cell size
+
+        # Create cells
+        for y in range(self.grid_height):
+            for x in range(self.grid_width):
+                upward = (x + y) % 2 == 0
+                cell = TriangleCell(x, y, self.cell_size, upward=upward, alive=False, lifeform_id=None)
+                self.cells[(x, y)] = cell
+
+        total_cells = len(self.cells)
+        alive_cells_total = int(total_cells * self.initial_alive_percentage)
+        num_lifeforms = len(self.lifeforms) if self.lifeforms else 1
+        alive_cells_per_lifeform = max(alive_cells_total // num_lifeforms, 1)
+
+        # Assign alive cells to lifeforms
+        if self.lifeforms:
+            for lifeform in self.lifeforms:
+                assigned = 0
+                while assigned < alive_cells_per_lifeform:
+                    cell = random.choice(list(self.cells.values()))
+                    if not cell.alive:
+                        cell.alive = True
+                        cell.lifeform_id = lifeform.id
+                        cell.alive_duration = 1
+                        assigned += 1
+        else:
+            # Single lifeform scenario
+            for cell in self.cells.values():
+                if random.random() < self.initial_alive_percentage:
+                    cell.alive = True
+                    cell.lifeform_id = 1  # Default lifeform ID
+                    cell.alive_duration = 1
+
+        self.calculate_neighbors()
+
+    def calculate_neighbors(self):
+        """
+        Calculate and assign neighbors for each cell.
+        """
+        # Define neighbor offsets for triangles
+        neighbor_offsets = [
+            (-1, 0), (1, 0), (0, -1), (0, 1),
+            (-1, -1), (1, 1), (-1, 1), (1, -1)
+        ]
+        for cell in self.cells.values():
+            neighbors = []
+            for dx, dy in neighbor_offsets:
+                neighbor_coord = (cell.x + dx, cell.y + dy)
+                neighbor = self.cells.get(neighbor_coord)
+                if neighbor:
+                    neighbors.append(neighbor)
+            cell.neighbors = neighbors
+
+    def draw(self, surface):
+        """
+        Draw all cells in the grid with appropriate colors based on lifeforms.
+
+        Args:
+            surface (pygame.Surface): The surface to draw on.
+        """
+        for cell in self.cells.values():
+            lifeform = self.get_lifeform_by_id(cell.lifeform_id)
+            cell.draw(surface, self.offset_x, self.offset_y, lifeform=lifeform)
+
+    def get_lifeform_by_id(self, lifeform_id):
+        """
+        Retrieve a Lifeform object by its ID.
+
+        Args:
+            lifeform_id (int or None): The ID of the lifeform.
+
+        Returns:
+            Lifeform or None: The corresponding Lifeform object or None if not found.
+        """
+        if lifeform_id is None:
+            return None
+        for lifeform in self.lifeforms:
+            if lifeform.id == lifeform_id:
+                return lifeform
+        return None
+
+    def update(self):
+        """
+        Update the grid to the next generation based on each lifeform's rules.
+
+        Returns:
+            tuple: A tuple containing the number of births, deaths, static cells,
+                   lifeform_alive_counts, lifeform_static_counts, lifeform_metrics.
+        """
+        new_states = {}
+        births = 0
+        deaths = 0
+        static_cells = 0
+
+        lifeform_static_counts = {lifeform.id: 0 for lifeform in self.lifeforms}
+        lifeform_alive_counts = {lifeform.id: 0 for lifeform in self.lifeforms}
+        lifeform_death_counts = {lifeform.id: 0 for lifeform in self.lifeforms}
+        lifeform_birth_counts = {lifeform.id: 0 for lifeform in self.lifeforms}
+        lifeform_lifespans = {lifeform.id: [] for lifeform in self.lifeforms}
+        previous_alive_counts = self.previous_alive_counts if hasattr(self, 'previous_alive_counts') else {lifeform.id: 0 for lifeform in self.lifeforms}
+        lifeform_previous_positions = self.lifeform_previous_positions if hasattr(self, 'lifeform_previous_positions') else {lifeform.id: set() for lifeform in self.lifeforms}
+        lifeform_current_positions = {lifeform.id: set() for lifeform in self.lifeforms}
+
+        # Record previous positions
+        for cell in self.cells.values():
+            if cell.alive:
+                lifeform_previous_positions[cell.lifeform_id].add((cell.x, cell.y))
+
+        for cell in self.cells.values():
+            if cell.lifeform_id is None:
+                # Dead cell: Check for possible births from any lifeform
+                possible_births = {}
+                for lifeform in self.lifeforms:
+                    live_neighbors = sum(1 for neighbor in cell.neighbors if neighbor.alive and neighbor.lifeform_id == lifeform.id)
+                    if live_neighbors in lifeform.birth_rules:
+                        possible_births[lifeform.id] = live_neighbors
+                if possible_births:
+                    # Randomly select one lifeform to birth the cell
+                    selected_lifeform_id = random.choice(list(possible_births.keys()))
+                    new_states[cell] = selected_lifeform_id  # Cell becomes alive with selected lifeform
+                    births += 1
+                    lifeform_birth_counts[selected_lifeform_id] += 1
+                else:
+                    new_states[cell] = None  # Remains dead
+            else:
+                # Live cell: Apply survival rules of its own lifeform
+                lifeform = self.get_lifeform_by_id(cell.lifeform_id)
+                if lifeform:
+                    live_neighbors = sum(1 for neighbor in cell.neighbors if neighbor.alive and neighbor.lifeform_id == lifeform.id)
+                    if live_neighbors in lifeform.survival_rules:
+                        new_states[cell] = lifeform.id  # Survives
+                    else:
+                        new_states[cell] = None  # Dies
+                        deaths += 1
+                        lifeform_death_counts[cell.lifeform_id] += 1
+                        # Record lifespan
+                        lifeform_lifespans[cell.lifeform_id].append(cell.alive_duration)
+                else:
+                    new_states[cell] = None  # Shouldn't happen
+
+        # Update cell states and alive_duration
+        for cell, new_lifeform_id in new_states.items():
+            if new_lifeform_id is not None:
+                if cell.alive:
+                    if cell.lifeform_id == new_lifeform_id:
+                        cell.alive_duration += 1
+                    else:
+                        # Record lifespan before changing lifeform
+                        lifeform_lifespans[cell.lifeform_id].append(cell.alive_duration)
+                        cell.lifeform_id = new_lifeform_id
+                        cell.alive_duration = 1
+                else:
+                    cell.alive = True
+                    cell.lifeform_id = new_lifeform_id
+                    cell.alive_duration = 1
+            else:
+                if cell.alive:
+                    # Record lifespan
+                    lifeform_lifespans[cell.lifeform_id].append(cell.alive_duration)
+                    cell.alive = False
+                    cell.lifeform_id = None
+                    cell.alive_duration = 0
+
+            # Count static cells and alive cells per lifeform
+            if cell.alive:
+                lifeform_alive_counts[cell.lifeform_id] += 1
+                lifeform_current_positions[cell.lifeform_id].add((cell.x, cell.y))
+                if cell.alive_duration > 10:
+                    static_cells += 1
+                    lifeform_static_counts[cell.lifeform_id] += 1
+
+        # Compute metrics for each lifeform
+        lifeform_metrics = {}
+        total_cells = len(self.cells)
+        total_alive_cells = sum(lifeform_alive_counts.values())
+        for lifeform in self.lifeforms:
+            lifeform_id = lifeform.id
+            metrics = {}
+
+            # Average Cluster Size for Static Lifeforms
+            metrics['average_cluster_size'] = self.calculate_average_cluster_size(lifeform_id)
+
+            # Growth Rate
+            previous_alive = previous_alive_counts.get(lifeform_id, 0)
+            current_alive = lifeform_alive_counts.get(lifeform_id, 0)
+            metrics['growth_rate'] = (current_alive - previous_alive) if self.generation > 0 else 0
+
+            # Death Rate
+            metrics['death_rate'] = lifeform_death_counts.get(lifeform_id, 0)
+
+            # Average Lifespan of Cells
+            lifespans = lifeform_lifespans.get(lifeform_id, [])
+            if lifespans:
+                metrics['average_lifespan'] = sum(lifespans) / len(lifespans)
+            else:
+                metrics['average_lifespan'] = 0
+
+            # Maximum Cluster Size
+            metrics['max_cluster_size'] = self.calculate_max_cluster_size(lifeform_id)
+
+            # Dominance Ratio
+            if total_alive_cells > 0:
+                metrics['dominance_ratio'] = current_alive / total_alive_cells
+            else:
+                metrics['dominance_ratio'] = 0
+
+            # Entropy (Spatial Distribution)
+            metrics['entropy'] = self.calculate_entropy(lifeform_id)
+
+            # Mobility
+            previous_positions = lifeform_previous_positions.get(lifeform_id, set())
+            current_positions = lifeform_current_positions.get(lifeform_id, set())
+            if previous_positions:
+                moved_cells = len(current_positions - previous_positions)
+                total_previous_cells = len(previous_positions)
+                metrics['mobility'] = moved_cells / total_previous_cells
+            else:
+                metrics['mobility'] = 0
+
+            # Diversity of Patterns
+            metrics['diversity'] = self.calculate_pattern_diversity(lifeform_id)
+
+            lifeform_metrics[lifeform_id] = metrics
+
+        # Save current alive counts and positions for the next generation
+        self.previous_alive_counts = lifeform_alive_counts.copy()
+        self.lifeform_previous_positions = lifeform_current_positions
+
+        return births, deaths, static_cells, lifeform_alive_counts, lifeform_static_counts, lifeform_metrics
+
+    def calculate_average_cluster_size(self, lifeform_id):
+        """
+        Calculate the average cluster size for static lifeforms.
+
+        Args:
+            lifeform_id (int): The ID of the lifeform.
+
+        Returns:
+            float: The average cluster size.
+        """
+        clusters = self.identify_clusters(lifeform_id)
+        if clusters:
+            cluster_sizes = [len(cluster) for cluster in clusters]
+            return sum(cluster_sizes) / len(cluster_sizes)
+        else:
+            return 0
+
+    def calculate_max_cluster_size(self, lifeform_id):
+        """
+        Calculate the maximum cluster size for the lifeform.
+
+        Args:
+            lifeform_id (int): The ID of the lifeform.
+
+        Returns:
+            int: The size of the largest cluster.
+        """
+        clusters = self.identify_clusters(lifeform_id)
+        if clusters:
+            return max(len(cluster) for cluster in clusters)
+        else:
+            return 0
+
+    def identify_clusters(self, lifeform_id):
+        """
+        Identify clusters of connected cells for the lifeform.
+
+        Args:
+            lifeform_id (int): The ID of the lifeform.
+
+        Returns:
+            list of set: A list where each element is a set of connected cells forming a cluster.
+        """
+        visited = set()
+        clusters = []
+
+        for cell in self.cells.values():
+            if cell.alive and cell.lifeform_id == lifeform_id and cell not in visited:
+                cluster = set()
+                self.dfs_iterative(cell, lifeform_id, visited, cluster)
+                clusters.append(cluster)
+        return clusters
+
+    def dfs_iterative(self, start_cell, lifeform_id, visited, cluster):
+        """
+        Iterative depth-first search to identify connected cells.
+
+        Args:
+            start_cell (TriangleCell): The starting cell for DFS.
+            lifeform_id (int): The ID of the lifeform.
+            visited (set): Set of already visited cells.
+            cluster (set): Set to accumulate connected cells.
+        """
+        stack = [start_cell]
+        while stack:
+            cell = stack.pop()
+            if cell not in visited:
+                visited.add(cell)
+                cluster.add(cell)
+                for neighbor in cell.neighbors:
+                    if neighbor.alive and neighbor.lifeform_id == lifeform_id and neighbor not in visited:
+                        stack.append(neighbor)
+
+    def calculate_entropy(self, lifeform_id):
+        """
+        Calculate the entropy of the spatial distribution of the lifeform's cells.
+
+        Args:
+            lifeform_id (int): The ID of the lifeform.
+
+        Returns:
+            float: The entropy value.
+        """
+        positions = [(cell.x, cell.y) for cell in self.cells.values() if cell.alive and cell.lifeform_id == lifeform_id]
+        if not positions:
+            return 0
+        xs, ys = zip(*positions)
+        mean_x = sum(xs) / len(xs)
+        mean_y = sum(ys) / len(ys)
+        variance_x = sum((x - mean_x) ** 2 for x in xs) / len(xs)
+        variance_y = sum((y - mean_y) ** 2 for y in ys) / len(ys)
+        entropy = (variance_x + variance_y) ** 0.5
+        return entropy
+
+    def calculate_pattern_diversity(self, lifeform_id):
+        """
+        Calculate the diversity of patterns for the lifeform.
+
+        Args:
+            lifeform_id (int): The ID of the lifeform.
+
+        Returns:
+            int: The number of distinct patterns.
+        """
+        clusters = self.identify_clusters(lifeform_id)
+        pattern_set = set()
+        for cluster in clusters:
+            pattern = frozenset((cell.x, cell.y) for cell in cluster)
+            pattern_set.add(pattern)
+        return len(pattern_set)
+
+    def handle_click(self, pos):
+        """
+        Handle a mouse click event to toggle a cell's state.
+
+        Args:
+            pos (tuple): (x, y) pixel coordinates of the click.
+        """
+        x, y = pos
+        for cell in self.cells.values():
+            x_cell, y_cell = cell.get_position(self.offset_x, self.offset_y)
+            rect = pygame.Rect(x_cell, y_cell, cell.size, cell.size)
+            if rect.collidepoint(x, y):
+                if cell.alive:
+                    # Toggle to dead
+                    cell.alive = False
+                    cell.lifeform_id = None
+                    cell.alive_duration = 0
+                else:
+                    # Toggle to alive with a random lifeform
+                    if self.lifeforms:
+                        cell.lifeform_id = random.choice(self.lifeforms).id
+                    else:
+                        cell.lifeform_id = 1  # Default lifeform ID
+                    cell.alive = True
+                    cell.alive_duration = 1
+                break
+
+    @staticmethod
+    def point_in_polygon(x, y, polygon):
+        """
+        Determine if a point is inside a polygon using the ray casting algorithm.
+
+        Args:
+            x (float): X-coordinate of the point.
+            y (float): Y-coordinate of the point.
+            polygon (list): List of (x, y) tuples representing the polygon corners.
+
+        Returns:
+            bool: True if the point is inside the polygon, False otherwise.
+        """
+        num = len(polygon)
+        inside = False
+
+        p1x, p1y = polygon[0]
+        for i in range(num + 1):
+            p2x, p2y = polygon[i % num]
+            if y > min(p1y, p2y):
+                if y <= max(p1y, p2y):
+                    if x <= max(p1x, p2x):
+                        if p1y != p2y:
+                            xints = (y - p1y) * (p2x - p1x) / (p2y - p1y + 1e-6) + p1x  # Prevent division by zero
+                        else:
+                            xints = p1x
+                        if p1x == p2x or x <= xints:
+                            inside = not inside
+            p1x, p1y = p2x, p2y
+
+        return inside
+
+
