@@ -108,7 +108,7 @@ A customisable and extensible implementation of Conway's Game of Life, featuring
     life_records: Stores per-generation data for lifeforms.
     lifeform_meta: Stores metadata for each lifeform used in the simulations.
 
-### Customization
+### Customisation
 
 1. **Lifeforms**
 
