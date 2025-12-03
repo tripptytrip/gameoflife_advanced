@@ -62,6 +62,7 @@ class GameOfLife:
         self.auto_run_mode = False
         self.auto_run_sessions = 0
         self.auto_run_generations = 100  # Default value
+        self.auto_run_session_count = 0
         print(f"auto_run_generations set to {self.auto_run_generations}")
 
         # Initialize SettingsPanel after grid_width and grid_height are set
@@ -233,8 +234,8 @@ class GameOfLife:
             self.data_recorder.insert_record(
                 generation=self.generation,
                 lifeform_id=lifeform_id,
-                birth_rules=','.join(map(str, birth_rules_array)),
-                survival_rules=','.join(map(str, survival_rules_array)),
+                birth_rules=birth_rules_array,
+                survival_rules=survival_rules_array,
                 alive_count=alive_count,
                 static_count=static_count,
                 shape=self.shape,

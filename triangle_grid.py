@@ -284,6 +284,7 @@ class TriangleGrid:
         # Save current alive counts and positions for the next generation
         self.previous_alive_counts = lifeform_alive_counts.copy()
         self.lifeform_previous_positions = lifeform_current_positions
+        self.generation += 1  # Increment generation for tracking growth rate
 
         return births, deaths, static_cells, lifeform_alive_counts, lifeform_static_counts, lifeform_metrics
 
