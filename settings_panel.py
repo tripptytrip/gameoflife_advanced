@@ -17,7 +17,8 @@ class Slider:
     """
     Represents a slider UI element.
     """
-    def __init__(self, label, min_val, max_val, current_val, x, y, width, height, font, callback=None):
+    def __init__(self, label, min_val, max_val, current_val, x, y, width, height, font,
+                 live_callback=None, release_callback=None):
         self.label = label
         self.min = min_val
         self.max = max_val
@@ -28,7 +29,10 @@ class Slider:
         self.handle_y = y + height // 2
         self.dragging = False
         self.font = font
-        self.callback = callback  # Function to call when value changes
+        # Callback to fire while dragging (live updates)
+        self.live_callback = live_callback
+        # Callback to fire when the user releases the handle (for heavy work)
+        self.release_callback = release_callback
 
     def get_handle_position(self):
         """
@@ -50,6 +54,8 @@ class Slider:
         elif event.type == pygame.MOUSEBUTTONUP:
             if event.button == 1:
                 self.dragging = False
+                if self.release_callback:
+                    self.release_callback(self.value)
         elif event.type == pygame.MOUSEMOTION:
             if self.dragging:
                 mouse_x, _ = event.pos
@@ -58,8 +64,8 @@ class Slider:
                 # Update value based on handle position
                 proportion = (self.handle_x - self.rect.x) / self.rect.width
                 self.value = int(self.min + proportion * (self.max - self.min))
-                if self.callback:
-                    self.callback(self.value)
+                if self.live_callback:
+                    self.live_callback(self.value)
 
     def draw(self, surface):
         """
@@ -119,37 +125,37 @@ class SettingsPanel:
                 'min': 0,
                 'max': 100,
                 'value': int(self.game.initial_alive_percentage * 100),
-                'callback': self.update_initial_alive_percentage
+                'live_callback': self.update_initial_alive_percentage
             },
             'Simulation Speed (FPS)': {
                 'min': 1,
                 'max': 60,
                 'value': self.game.fps,
-                'callback': self.update_simulation_speed
+                'live_callback': self.update_simulation_speed
             },
             'Number of Lifeforms': {
                 'min': 1,
                 'max': 10,
                 'value': self.game.number_of_lifeforms,
-                'callback': self.update_number_of_lifeforms
+                'release_callback': self.update_number_of_lifeforms
             },
             'Grid Width': {  # New slider for grid width
                 'min': 10,
                 'max': 400,
                 'value': self.game.grid_width,
-                'callback': self.update_grid_width
+                'release_callback': self.update_grid_width
             },
             'Grid Height': {  # New slider for grid height
                 'min': 10,
                 'max': 200,
                 'value': self.game.grid_height,
-                'callback': self.update_grid_height
+                'release_callback': self.update_grid_height
             },
             'Number of Generations': {  # For auto-run
                 'min': 1,
                 'max': 1000,
                 'value': self.game.auto_run_generations,
-                'callback': self.update_number_of_generations
+                'release_callback': self.update_number_of_generations
             }
         }
 
@@ -413,7 +419,8 @@ class SettingsPanel:
                     width=width - 40,
                     height=15,
                     font=self.font,
-                    callback=slider_info['callback']
+                    live_callback=slider_info.get('live_callback'),
+                    release_callback=slider_info.get('release_callback')
                 )
                 setattr(self, f"slider_{label.replace(' ', '_')}", slider_obj)
 

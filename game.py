@@ -2,6 +2,7 @@
 
 import pygame
 import uuid
+import numpy as np
 from settings import (
     WINDOW_WIDTH,
     WINDOW_HEIGHT,
@@ -34,7 +35,7 @@ class GameOfLife:
         self.fps = 30  # Ensure this is set before SettingsPanel
         self.number_of_lifeforms = 1  # Default to 1 lifeform
         self.lifeforms = []
-        self.shape = 'triangle'  # Initialize grid shape
+        self.shape = 'square'  # Initialize grid shape
 
         # **Added grid_width and grid_height attributes**
         self.grid_width = 50      # Default grid width
@@ -57,6 +58,8 @@ class GameOfLife:
         self.is_paused = True
         self.generation = 0
         self.font = pygame.font.SysFont(FONT_NAME, FONT_SIZE)
+        # Limit how much history we plot/keep to avoid slow charts
+        self.history_limit = 300
         
         # Auto-run settings
         self.auto_run_mode = False
@@ -72,9 +75,14 @@ class GameOfLife:
         # Initialize counters and history
         self.total_births = 0
         self.total_deaths = 0
-        self.current_alive = sum(cell.alive for cell in self.grid.cells.values())
-        self.current_dead = len(self.grid.cells) - self.current_alive
-        self.current_static = sum(1 for cell in self.grid.cells.values() if cell.alive_duration > 10)
+        if hasattr(self.grid, 'grid'): #Numpy grid
+            self.current_alive = np.sum(self.grid.grid > 0)
+            self.current_dead = self.grid.grid.size - self.current_alive
+            self.current_static = np.sum(self.grid.grid_lifespans > 10)
+        else: #legacy grid
+            self.current_alive = sum(cell.alive for cell in self.grid.cells.values())
+            self.current_dead = len(self.grid.cells) - self.current_alive
+            self.current_static = sum(1 for cell in self.grid.cells.values() if cell.alive_duration > 10)
         self.history_generations = [self.generation]
         self.history_alive = [self.current_alive]
         self.history_dead = [self.current_dead]
@@ -126,9 +134,14 @@ class GameOfLife:
         self.total_births = 0
         self.total_deaths = 0
         self.generation = 0
-        self.current_alive = sum(cell.alive for cell in self.grid.cells.values())
-        self.current_dead = len(self.grid.cells) - self.current_alive
-        self.current_static = sum(1 for cell in self.grid.cells.values() if cell.alive_duration > 10)
+        if hasattr(self.grid, 'grid'): #Numpy grid
+            self.current_alive = np.sum(self.grid.grid > 0)
+            self.current_dead = self.grid.grid.size - self.current_alive
+            self.current_static = np.sum(self.grid.grid_lifespans > 10)
+        else: #legacy grid
+            self.current_alive = sum(cell.alive for cell in self.grid.cells.values())
+            self.current_dead = len(self.grid.cells) - self.current_alive
+            self.current_static = sum(1 for cell in self.grid.cells.values() if cell.alive_duration > 10)
         self.history_generations = [self.generation]
         self.history_alive = [self.current_alive]
         self.history_dead = [self.current_dead]
@@ -203,13 +216,15 @@ class GameOfLife:
         """
         Update the simulation by one generation.
         """
-        # Update the grid and get per-lifeform counts and metrics
         births, deaths, static_cells, lifeform_alive_counts, lifeform_static_counts, lifeform_metrics = self.grid.update()
         self.generation += 1
         self.total_births += births
         self.total_deaths += deaths
-        self.current_alive = sum(cell.alive for cell in self.grid.cells.values())
-        self.current_dead = len(self.grid.cells) - self.current_alive
+        self.current_alive = sum(lifeform_alive_counts.values())
+        if hasattr(self.grid, 'grid'): #Numpy grid
+            self.current_dead = self.grid.grid.size - self.current_alive
+        else: #legacy grid
+            self.current_dead = len(self.grid.cells) - self.current_alive
         self.current_static = static_cells
 
         # Update history
@@ -222,6 +237,7 @@ class GameOfLife:
 
         # Update lifeform alive counts
         self.update_lifeform_alive_counts(lifeform_alive_counts)
+        self.trim_history()
 
         # Insert data into the database
         for lifeform in self.lifeforms[:self.number_of_lifeforms]:
@@ -303,9 +319,14 @@ class GameOfLife:
                 if event.button == 1:  # Left click
                     self.grid.handle_click(event.pos)
                     # Update current alive and dead counts
-                    self.current_alive = sum(cell.alive for cell in self.grid.cells.values())
-                    self.current_dead = len(self.grid.cells) - self.current_alive
-                    self.current_static = sum(1 for cell in self.grid.cells.values() if cell.alive_duration > 10)
+                    if hasattr(self.grid, 'grid'): #Numpy grid
+                        self.current_alive = np.sum(self.grid.grid > 0)
+                        self.current_dead = self.grid.grid.size - self.current_alive
+                        self.current_static = np.sum(self.grid.grid_lifespans > 10)
+                    else: #legacy grid
+                        self.current_alive = sum(cell.alive for cell in self.grid.cells.values())
+                        self.current_dead = len(self.grid.cells) - self.current_alive
+                        self.current_static = sum(1 for cell in self.grid.cells.values() if cell.alive_duration > 10)
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_SPACE:
                     self.is_paused = not self.is_paused
@@ -355,13 +376,18 @@ class GameOfLife:
             initial (bool): If True, initializes the counts based on the current grid.
         """
         if initial:
-            # Initialize with current counts from the grid
-            for lifeform in self.lifeforms[:self.number_of_lifeforms]:
-                count = sum(
-                    cell.alive and cell.lifeform_id == lifeform.id
-                    for cell in self.grid.cells.values()
-                )
-                self.lifeform_alive_counts[lifeform.id].append(count)
+            if hasattr(self.grid, 'grid'): #Numpy grid
+                for lifeform in self.lifeforms[:self.number_of_lifeforms]:
+                    count = np.sum(self.grid.grid == lifeform.id)
+                    self.lifeform_alive_counts[lifeform.id].append(count)
+            else: #legacy grid
+                # Initialize with current counts from the grid
+                for lifeform in self.lifeforms[:self.number_of_lifeforms]:
+                    count = sum(
+                        cell.alive and cell.lifeform_id == lifeform.id
+                        for cell in self.grid.cells.values()
+                    )
+                    self.lifeform_alive_counts[lifeform.id].append(count)
         elif lifeform_alive_counts is not None:
             # Append counts to existing history
             for lifeform_id, count in lifeform_alive_counts.items():
@@ -369,6 +395,28 @@ class GameOfLife:
                     self.lifeform_alive_counts[lifeform_id].append(count)
                 else:
                     self.lifeform_alive_counts[lifeform_id] = [count]
+
+    def trim_history(self):
+        """
+        Keep history arrays capped so chart drawing stays fast.
+        """
+        def trim(lst):
+            excess = len(lst) - self.history_limit
+            if excess > 0:
+                del lst[:excess]
+
+        for lst in [
+            self.history_generations,
+            self.history_alive,
+            self.history_dead,
+            self.history_static,
+            self.history_births,
+            self.history_deaths,
+        ]:
+            trim(lst)
+
+        for counts in self.lifeform_alive_counts.values():
+            trim(counts)
 
     def draw(self):
         """
@@ -442,7 +490,7 @@ class GameOfLife:
         pygame.draw.rect(self.screen, TEXT_COLOR, chart_rect, 2)
 
         # Determine max generations
-        max_generations = min(1000, len(self.history_generations))
+        max_generations = min(self.history_limit, len(self.history_generations))
 
         # Determine max count for y-axis
         max_count = max(
