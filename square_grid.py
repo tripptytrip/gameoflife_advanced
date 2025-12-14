@@ -97,34 +97,28 @@ class SquareGrid:
 
         lifeform_birth_counts = {lf.id: 0 for lf in self.lifeforms}
 
+        # Pre-calculate neighbor counts for all lifeforms
+        neighbor_counts = {}
+        for lifeform in self.lifeforms:
+            lifeform_grid = (self.grid == lifeform.id)
+            neighbor_counts[lifeform.id] = convolve2d(lifeform_grid, kernel, mode='same', boundary='wrap')
+
         # --- Birth Logic ---
         dead_cells = ~is_alive
         possible_births = np.zeros_like(self.grid)
 
         for lifeform in self.lifeforms:
-            lifeform_grid = (self.grid == lifeform.id)
-            neighbor_count = convolve2d(lifeform_grid, kernel, mode='same', boundary='wrap')
-            
+            neighbor_count = neighbor_counts[lifeform.id]
             birth_mask = np.isin(neighbor_count, lifeform.birth_rules) & dead_cells
-            
-            # For cells that can be born, mark them with the lifeform id
             possible_births[birth_mask] = lifeform.id
 
-        # Resolve conflicts: if a cell can be born from multiple lifeforms, pick one randomly
-        # This is a simplified approach. A more robust method might be needed for complex scenarios.
         birth_locations = np.argwhere(possible_births > 0)
         
-        # To avoid iterating, we can pre-calculate random choices for all possible birth locations
-        # and then apply them. However, for simplicity and to handle the case where a dead cell
-        # is surrounded by multiple lifeform types, we will iterate here over the birth locations.
         if birth_locations.size > 0:
             for y, x in birth_locations:
-                # Find all lifeforms that could give birth to this cell
                 potential_parents = []
                 for lifeform in self.lifeforms:
-                    lifeform_grid = (self.grid == lifeform.id)
-                    neighbor_count = convolve2d(lifeform_grid, kernel, mode='same', boundary='wrap')[y,x]
-                    if np.isin(neighbor_count, lifeform.birth_rules):
+                    if np.isin(neighbor_counts[lifeform.id][y, x], lifeform.birth_rules):
                         potential_parents.append(lifeform.id)
 
                 if potential_parents:
@@ -134,11 +128,10 @@ class SquareGrid:
                     births += 1
                     lifeform_birth_counts[chosen_parent] += 1
 
-
         # --- Survival and Death Logic ---
         for lifeform in self.lifeforms:
             lifeform_mask = (self.grid == lifeform.id)
-            neighbor_count = convolve2d(lifeform_mask, kernel, mode='same', boundary='wrap')
+            neighbor_count = neighbor_counts[lifeform.id]
             
             # Survival
             survival_mask = np.isin(neighbor_count, lifeform.survival_rules) & lifeform_mask

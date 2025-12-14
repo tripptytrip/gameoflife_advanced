@@ -62,6 +62,35 @@ class HexagonCell:
         # Optional: Draw grid lines for better visibility
         pygame.draw.polygon(surface, GRID_LINE_COLOR, corners, 1)
 
+    @staticmethod
+    def draw_static(surface, q, r, size, offset_x, offset_y, lifeform=None, alive_duration=0):
+        """
+        Static method to draw a hexagon cell on the given surface.
+        """
+        # Determine the color based on lifeform and alive_duration
+        if lifeform:
+            if alive_duration > 10:
+                color = lifeform.color_static
+            else:
+                color = lifeform.color_alive
+        else:
+            color = DEAD_CELL_COLOR
+
+        # odd-q offset coordinates so rows stay aligned into a rectangle
+        center_x = size * 1.5 * q + offset_x
+        center_y = size * math.sqrt(3) * (r + 0.5 * (q & 1)) + offset_y
+        
+        angles = [math.radians(60 * i) for i in range(6)]
+        corners = [
+            (center_x + size * math.cos(angle),
+             center_y + size * math.sin(angle))
+            for angle in angles
+        ]
+        
+        pygame.draw.polygon(surface, color, corners)
+        # Optional: Draw grid lines for better visibility
+        pygame.draw.polygon(surface, GRID_LINE_COLOR, corners, 1)
+
     def get_corners(self, offset_x, offset_y):
         """
         Calculate the corner positions of the hexagon cell for flat-topped hexagons.

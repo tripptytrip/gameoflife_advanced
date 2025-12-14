@@ -63,7 +63,7 @@ class GameOfLife:
         
         # Auto-run settings
         self.auto_run_mode = False
-        self.auto_run_sessions = 0
+        self.auto_run_sessions = 1
         self.auto_run_generations = 100  # Default value
         self.auto_run_session_count = 0
         print(f"auto_run_generations set to {self.auto_run_generations}")
@@ -282,6 +282,9 @@ class GameOfLife:
             # Auto-run complete
             self.auto_run_mode = False
             print(f"Auto-run completed: {self.auto_run_sessions} sessions executed.")
+            self.data_recorder.close()
+            pygame.quit()
+            quit()
 
     def start_auto_run(self, num_sessions):
         """

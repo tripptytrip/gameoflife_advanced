@@ -63,6 +63,42 @@ class TriangleCell:
         # Optional: Draw grid lines for better visibility
         pygame.draw.polygon(surface, GRID_LINE_COLOR, self.get_corners(offset_x, offset_y), 1)
 
+    @staticmethod
+    def draw_static(surface, x, y, size, upward, offset_x, offset_y, lifeform=None, alive_duration=0):
+        """
+        Static method to draw a triangle cell on the given surface.
+        """
+        # Determine the color based on lifeform and alive_duration
+        if lifeform:
+            if alive_duration > 10:
+                color = lifeform.color_static
+            else:
+                color = lifeform.color_alive
+        else:
+            color = DEAD_CELL_COLOR
+        
+        x0 = x * (size / 2) + offset_x
+        y0 = y * (size * math.sqrt(3) / 2) + offset_y
+        half_size = size / 2
+        height = size * math.sqrt(3) / 2
+
+        if upward:
+            corners = [
+                (x0, y0 - height / 2),
+                (x0 - half_size, y0 + height / 2),
+                (x0 + half_size, y0 + height / 2)
+            ]
+        else:
+            corners = [
+                (x0, y0 + height / 2),
+                (x0 - half_size, y0 - height / 2),
+                (x0 + half_size, y0 - height / 2)
+            ]
+        
+        pygame.draw.polygon(surface, color, corners)
+        # Optional: Draw grid lines for better visibility
+        pygame.draw.polygon(surface, GRID_LINE_COLOR, corners, 1)
+
     def get_corners(self, offset_x, offset_y):
         """
         Calculate the corner positions of the triangle cell.

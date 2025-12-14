@@ -52,11 +52,14 @@ class DataRecorder:
     """
     Handles data recording to the database.
     """
-    def __init__(self, session_id):
+    def __init__(self, session_id, batch_size=1000):
         self.session_id = session_id
         self.conn = sqlite3.connect('species.db', check_same_thread=False)
         self.lock = threading.Lock()
         self.create_tables()
+        self.record_buffer = []
+        self.meta_buffer = set()
+        self.batch_size = batch_size
     
     def create_tables(self):
         with self.lock:
@@ -124,23 +127,50 @@ class DataRecorder:
             self.conn.commit()
         
     def insert_record(self, generation, lifeform_id, birth_rules, survival_rules, alive_count, static_count, shape, metrics):
+        lifeform_profile = ''.join(map(str, birth_rules)) + ''.join(map(str, survival_rules))
+        self.meta_buffer.add((self.session_id, lifeform_id, lifeform_profile))
+        
+        self.record_buffer.append((
+            self.session_id,
+            generation,
+            lifeform_id,
+            ','.join(map(str, birth_rules)),
+            ','.join(map(str, survival_rules)),
+            alive_count,
+            static_count,
+            shape,
+            metrics.get('average_cluster_size', 0),
+            metrics.get('growth_rate', 0),
+            metrics.get('death_rate', 0),
+            metrics.get('average_lifespan', 0),
+            metrics.get('max_cluster_size', 0),
+            metrics.get('dominance_ratio', 0),
+            metrics.get('entropy', 0),
+            metrics.get('mobility', 0),
+            metrics.get('diversity', 0)
+        ))
+        
+        if len(self.record_buffer) >= self.batch_size:
+            self.flush()
+        
+    def flush(self):
         with self.lock:
+            if not self.record_buffer:
+                return
+
             c = self.conn.cursor()
-            lifeform_profile = ''.join(map(str, birth_rules)) + ''.join(map(str, survival_rules))
-            # Insert lifeform metadata if not exists
-            c.execute('''
+            
+            # Insert lifeform metadata
+            c.executemany('''
                 INSERT OR IGNORE INTO lifeform_meta (
                     session_id,
                     lifeform,
                     lifeform_profile
                 ) VALUES (?, ?, ?)
-            ''', (
-                self.session_id,
-                lifeform_id,
-                lifeform_profile
-            ))
-            # Insert lifeform record
-            c.execute('''
+            ''', list(self.meta_buffer))
+            
+            # Insert lifeform records
+            c.executemany('''
                 INSERT INTO life_records (
                     session_id,
                     generation,
@@ -160,27 +190,13 @@ class DataRecorder:
                     mobility,
                     diversity
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                self.session_id,
-                generation,
-                lifeform_id,
-                ','.join(map(str, birth_rules)),
-                ','.join(map(str, survival_rules)),
-                alive_count,
-                static_count,
-                shape,
-                metrics.get('average_cluster_size', 0),
-                metrics.get('growth_rate', 0),
-                metrics.get('death_rate', 0),
-                metrics.get('average_lifespan', 0),
-                metrics.get('max_cluster_size', 0),
-                metrics.get('dominance_ratio', 0),
-                metrics.get('entropy', 0),
-                metrics.get('mobility', 0),
-                metrics.get('diversity', 0)
-            ))
+            ''', self.record_buffer)
+            
             self.conn.commit()
-        
+            self.record_buffer.clear()
+            self.meta_buffer.clear()
+
     def close(self):
+        self.flush()
         with self.lock:
             self.conn.close()

@@ -156,6 +156,12 @@ class SettingsPanel:
                 'max': 1000,
                 'value': self.game.auto_run_generations,
                 'release_callback': self.update_number_of_generations
+            },
+            'Number of Sessions': {  # For auto-run
+                'min': 1,
+                'max': 100,
+                'value': 1,
+                'release_callback': self.update_number_of_sessions
             }
         }
 
@@ -223,7 +229,13 @@ class SettingsPanel:
         Update the number of generations for auto-run.
         """
         self.game.auto_run_generations = value
-
+    
+    def update_number_of_sessions(self, value):
+        """
+        Update the number of sessions for auto-run.
+        """
+        self.game.auto_run_sessions = value
+    
     def handle_event(self, event):
         """
         Handle events specific to the settings panel, including sliders and buttons.
@@ -328,7 +340,7 @@ class SettingsPanel:
         """
         Trigger the auto-run mode in the game.
         """
-        num_sessions = 1  # You can modify this to allow user input
+        num_sessions = self.game.auto_run_sessions
         if num_sessions >= 1:
             self.game.start_auto_run(num_sessions)
 
