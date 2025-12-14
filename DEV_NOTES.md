@@ -6,8 +6,8 @@
   - Triangle: configurable; default `edge+vertex` gives 12 neighbors per cell (orientation-consistent sets) in `triangle_grid_numpy.py:_build_neighbor_offsets`; `edge` mode retains 3-neighbor edge-only adjacency.
 
 - Hardcoded N=8 assumptions:
-  - `game.py:randomise_lifeforms` seeds rules with `random.sample(range(0, 9), ...)`, assuming neighbor counts 0–8.
-  - `rule_discovery.py` uses an 18-bit genome (9 birth + 9 survival) in `rules_to_gene`/`gene_to_rules` and seeds populations with `range(9)`, matching square’s 0–8 neighborhood.
+  - Previously in `game.py:randomise_lifeforms` and rule logging; now replaced with `get_max_neighbors`.
+  - `rule_discovery.py` now uses `get_max_neighbors` for genome length and seeding.
 
 - Boundary conditions:
   - Square: toroidal wrap via `convolve2d(..., boundary='wrap')` in `square_grid.py:update`.

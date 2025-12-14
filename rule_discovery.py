@@ -10,6 +10,7 @@ from lifeform import Lifeform
 from rules import Rule
 from experiments.runner import make_grid, run_timeseries, run_damage_spreading
 from analysis.criticality_score import score_timeseries
+from neighbor_utils import get_max_neighbors
 
 # --- Constants for the Genetic Algorithm ---
 POPULATION_SIZE = 20
@@ -20,16 +21,7 @@ MUTATION_RATE = 1  # Number of bits to flip
 # Lattice config
 SHAPE = "square"  # Options: square, hexagon, triangle
 TRIANGLE_MODE = "edge+vertex"
-def _neighbor_count_for_shape(shape: str, triangle_mode: str) -> int:
-    if shape == "square":
-        return 8
-    if shape == "hexagon":
-        return 6
-    if shape == "triangle":
-        return 12 if triangle_mode == "edge+vertex" else 3
-    raise ValueError(f"Unsupported shape {shape}")
-
-NEIGHBOR_COUNT = _neighbor_count_for_shape(SHAPE, TRIANGLE_MODE)
+NEIGHBOR_COUNT = get_max_neighbors(SHAPE, TRIANGLE_MODE)
 GENE_LENGTH = 2 * (NEIGHBOR_COUNT + 1)
 
 # A lock to prevent race conditions when writing to the JSON file

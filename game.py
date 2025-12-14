@@ -11,7 +11,8 @@ from settings import (
     FONT_NAME,
     FONT_SIZE,
     TEXT_COLOR,
-    LEFT_PANEL_WIDTH
+    LEFT_PANEL_WIDTH,
+    DEFAULT_TRIANGLE_MODE,
 )
 from settings_panel import SettingsPanel
 from grid_factory import create_grid
@@ -19,6 +20,7 @@ from tooltip import Tooltip
 from data_recorder import DataRecorder  # Ensure DataRecorder is imported
 from lifeform import Lifeform  # Ensure Lifeform is imported
 import random
+from neighbor_utils import get_max_neighbors
 
 class GameOfLife:
     """
@@ -36,6 +38,10 @@ class GameOfLife:
         self.number_of_lifeforms = 1  # Default to 1 lifeform
         self.lifeforms = []
         self.shape = 'square'  # Initialize grid shape
+        self.triangle_mode = DEFAULT_TRIANGLE_MODE
+        self.left_panel_width = LEFT_PANEL_WIDTH
+        self._resizing_panel = False
+        self._panel_min_width = 220
 
         # **Added grid_width and grid_height attributes**
         self.grid_width = 50      # Default grid width
@@ -52,7 +58,8 @@ class GameOfLife:
             initial_alive_percentage=self.initial_alive_percentage,
             shape=self.shape,
             grid_width=self.grid_width,      # Pass grid_width
-            grid_height=self.grid_height     # Pass grid_height
+            grid_height=self.grid_height,     # Pass grid_height
+            triangle_neighborhood_mode=self.triangle_mode
         )
         self.is_running = False
         self.is_paused = True
@@ -107,10 +114,11 @@ class GameOfLife:
         Randomly generate lifeforms with unique birth and survival rules.
         """
         self.lifeforms = []
+        max_n = get_max_neighbors(self.shape, self.triangle_mode)
         for i in range(1, 11):  # Up to 10 lifeforms
             # Randomly select birth and survival rules
-            birth_rules = sorted(random.sample(range(0, 9), random.randint(1, 4)))
-            survival_rules = sorted(random.sample(range(0, 9), random.randint(1, 4)))
+            birth_rules = sorted(random.sample(range(0, max_n + 1), random.randint(1, min(4, max_n + 1))))
+            survival_rules = sorted(random.sample(range(0, max_n + 1), random.randint(1, min(4, max_n + 1))))
             lifeform = Lifeform(lifeform_id=i, birth_rules=birth_rules, survival_rules=survival_rules)
             self.lifeforms.append(lifeform)
 
@@ -125,7 +133,8 @@ class GameOfLife:
             grid_width=self.grid_width,      # Pass grid_width
             grid_height=self.grid_height,    # Pass grid_height
             available_width=available_width,
-            available_height=available_height
+            available_height=available_height,
+            triangle_neighborhood_mode=self.triangle_mode
         )
         # Calculate grid offsets
         self.calculate_grid_offsets()
@@ -164,7 +173,7 @@ class GameOfLife:
         chart_rect = self.get_chart_rect()
         grid_start_y = chart_rect.bottom + padding
 
-        grid_start_x = LEFT_PANEL_WIDTH + padding  # Start to the right of the left panel for all shapes
+        grid_start_x = self.left_panel_width + padding  # Start to the right of the left panel for all shapes
 
         self.grid.calculate_offsets(start_x=grid_start_x, start_y=grid_start_y)
 
@@ -178,9 +187,9 @@ class GameOfLife:
         chart_height = 180
 
         chart_rect = pygame.Rect(
-            LEFT_PANEL_WIDTH + left_padding,  # Start to the right of the left panel and left padding
+            self.left_panel_width + left_padding,  # Start to the right of the left panel and left padding
             top_padding,
-            self.screen.get_width() - LEFT_PANEL_WIDTH - left_padding - right_padding,
+            self.screen.get_width() - self.left_panel_width - left_padding - right_padding,
             chart_height
         )
         return chart_rect
@@ -193,7 +202,7 @@ class GameOfLife:
             tuple: (available_width, available_height)
         """
         padding = 10  # Padding in pixels
-        available_width = self.screen.get_width() - LEFT_PANEL_WIDTH - padding * 2
+        available_width = self.screen.get_width() - self.left_panel_width - padding * 2
         chart_rect = self.get_chart_rect()
         available_height = self.screen.get_height() - chart_rect.bottom - padding * 2
         return available_width, available_height
@@ -242,8 +251,8 @@ class GameOfLife:
         # Insert data into the database
         for lifeform in self.lifeforms[:self.number_of_lifeforms]:
             lifeform_id = lifeform.id
-            birth_rules_array = [1 if i in lifeform.birth_rules else 0 for i in range(9)]  # Adjusted to 9 for consistency
-            survival_rules_array = [1 if i in lifeform.survival_rules else 0 for i in range(9)]
+            birth_rules_array = sorted(lifeform.birth_rules)
+            survival_rules_array = sorted(lifeform.survival_rules)
             alive_count = lifeform_alive_counts.get(lifeform_id, 0)
             static_count = lifeform_static_counts.get(lifeform_id, 0)
             metrics = lifeform_metrics.get(lifeform_id, {})
@@ -315,11 +324,16 @@ class GameOfLife:
                 quit()
             # Always handle settings panel events
             self.settings_panel.handle_event(event)
-            if event.type == pygame.VIDEORESIZE:
-                self.screen = pygame.display.set_mode(event.size, pygame.RESIZABLE)
-                self.calculate_grid_offsets()  # Recalculate offsets on window resize
+            if event.type in (pygame.VIDEORESIZE, pygame.WINDOWRESIZED):
+                # Some backends send resize events without .size; fall back to current window size.
+                new_size = getattr(event, "size", self.screen.get_size())
+                self.handle_resize(new_size)
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == 1:  # Left click
+                    # Start panel resize drag if near divider
+                    if abs(event.pos[0] - self.left_panel_width) <= 6:
+                        self._resizing_panel = True
+                        continue
                     self.grid.handle_click(event.pos)
                     # Update current alive and dead counts
                     if hasattr(self.grid, 'grid'): #Numpy grid
@@ -330,6 +344,15 @@ class GameOfLife:
                         self.current_alive = sum(cell.alive for cell in self.grid.cells.values())
                         self.current_dead = len(self.grid.cells) - self.current_alive
                         self.current_static = sum(1 for cell in self.grid.cells.values() if cell.alive_duration > 10)
+            elif event.type == pygame.MOUSEBUTTONUP:
+                if event.button == 1 and self._resizing_panel:
+                    self._resizing_panel = False
+            elif event.type == pygame.MOUSEMOTION:
+                if self._resizing_panel:
+                    new_width = max(self._panel_min_width, min(event.pos[0], self.screen.get_width() - 200))
+                    if new_width != self.left_panel_width:
+                        self.left_panel_width = new_width
+                        self.handle_resize(self.screen.get_size())
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_SPACE:
                     self.is_paused = not self.is_paused
@@ -345,8 +368,20 @@ class GameOfLife:
                     if self.is_paused:
                         self.update_simulation()
 
-        # Update tooltip based on hovered element
-        self.update_tooltip(mouse_pos)
+    def handle_resize(self, size):
+        """
+        Respond to window resize without fighting the window manager.
+        """
+        if self.screen.get_size() != size:
+            self.screen = pygame.display.set_mode(size, pygame.RESIZABLE)
+
+        # Recompute available space and cell sizes without resetting state
+        available_width, available_height = self.get_available_screen_space()
+        if hasattr(self.grid, 'resize'):
+            self.grid.resize(available_width, available_height)
+        self.calculate_grid_offsets()  # Recalculate offsets on window resize
+        # Refresh tooltip state after layout change
+        self.update_tooltip(pygame.mouse.get_pos())
 
     def update_tooltip(self, mouse_pos):
         """
@@ -433,6 +468,7 @@ class GameOfLife:
 
         # Draw left panel background with rounded corners
         panel_rect = pygame.Rect(0, 0, LEFT_PANEL_WIDTH, self.screen.get_height())
+        panel_rect = pygame.Rect(0, 0, self.left_panel_width, self.screen.get_height())
         pygame.draw.rect(self.screen, PANEL_BACKGROUND_COLOR, panel_rect, border_radius=10)
 
         # Display text within the left panel using improved font
@@ -477,7 +513,7 @@ class GameOfLife:
         y_offset += 10  # Add some spacing
 
         # Draw settings panel within the left panel
-        self.settings_panel.draw(self.screen, x=10, y=y_offset, width=LEFT_PANEL_WIDTH - 20)
+        self.settings_panel.draw(self.screen, x=10, y=y_offset, width=self.left_panel_width - 20)
 
         # Draw tooltip
         self.tooltip.draw(self.screen, pygame.mouse.get_pos())

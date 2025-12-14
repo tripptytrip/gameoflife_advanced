@@ -10,8 +10,78 @@ from settings import (
     BUTTON_HOVER_COLOR,
     SCROLLBAR_COLOR,
     SCROLLBAR_HANDLE_COLOR,
+    DEFAULT_TRIANGLE_MODE,
 )
 from lifeform import Lifeform
+from neighbor_utils import get_max_neighbors
+
+class NumericInput:
+    """
+    Simple numeric input box with optional callback on commit.
+    """
+    def __init__(self, value, min_val, max_val, font, commit_callback=None):
+        self.value = value
+        self.text = str(value)
+        self.min = min_val
+        self.max = max_val
+        self.font = font
+        self.commit_callback = commit_callback
+        self.active = False
+        self.rect = None
+
+    def set_rect(self, rect):
+        self.rect = rect
+
+    def clamp(self, val):
+        return max(self.min, min(self.max, val))
+
+    def set_value(self, val, fire_callback=False):
+        val = int(self.clamp(val))
+        self.value = val
+        self.text = str(val)
+        if fire_callback and self.commit_callback:
+            self.commit_callback(val)
+
+    def commit(self):
+        try:
+            val = int(self.text) if self.text else self.value
+        except ValueError:
+            val = self.value
+        val = self.clamp(val)
+        changed = val != self.value
+        self.value = val
+        self.text = str(val)
+        if changed and self.commit_callback:
+            self.commit_callback(val)
+        return changed
+
+    def handle_event(self, event):
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if self.rect and self.rect.collidepoint(event.pos):
+                self.active = True
+            else:
+                if self.active:
+                    self.commit()
+                self.active = False
+        if not self.active:
+            return
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_BACKSPACE:
+                self.text = self.text[:-1]
+            elif event.key == pygame.K_RETURN:
+                self.commit()
+                self.active = False
+            elif event.unicode.isdigit():
+                self.text += event.unicode
+
+    def draw(self, surface, rect):
+        self.rect = rect
+        pygame.draw.rect(surface, BUTTON_COLOR, rect, border_radius=3)
+        border_color = BUTTON_HOVER_COLOR if self.active else TEXT_COLOR
+        pygame.draw.rect(surface, border_color, rect, 2, border_radius=3)
+        txt_surf = self.font.render(self.text if self.text else "0", True, TEXT_COLOR)
+        txt_rect = txt_surf.get_rect(center=rect.center)
+        surface.blit(txt_surf, txt_rect)
 
 class Slider:
     """
@@ -98,6 +168,7 @@ class SettingsPanel:
         self.game = game
         self.font = pygame.font.SysFont(FONT_NAME, FONT_SIZE)
         self.active_box = None
+        self.numeric_controls = {}
         self.setup_panel()
 
         # Scrollbar attributes
@@ -165,10 +236,43 @@ class SettingsPanel:
             }
         }
 
+        # Numeric inputs paired with sliders (number box is authoritative)
+        self.numeric_configs = {
+            'Initial Alive Percentage': {
+                'min': 0, 'max': 100,
+                'quick': [-5, -1, 1, 5]
+            },
+            'Grid Width': {
+                'min': 10, 'max': 400,
+                'quick': [-10, 10]
+            },
+            'Grid Height': {
+                'min': 10, 'max': 200,
+                'quick': [-10, 10]
+            },
+            'Number of Generations': {
+                'min': 1, 'max': 1000,
+                'quick': ['half', 'double']
+            },
+            'Number of Sessions': {
+                'min': 1, 'max': 100,
+                'quick': []
+            },
+            'Simulation Speed (FPS)': {
+                'min': 1, 'max': 60,
+                'quick': []
+            }
+        }
+
         self.selections = {
             'Grid Shape': {
                 'options': ['triangle', 'square', 'hexagon'],
                 'selected': self.game.shape,
+                'rect': None
+            },
+            'Triangle Neighborhood': {
+                'options': ['edge', 'edge+vertex'],
+                'selected': self.game.triangle_mode,
                 'rect': None
             }
         }
@@ -235,6 +339,39 @@ class SettingsPanel:
         Update the number of sessions for auto-run.
         """
         self.game.auto_run_sessions = value
+
+    def on_slider_change(self, label, value, original_callback):
+        """
+        Sync slider to numeric input and propagate callback.
+        """
+        if label in self.numeric_controls:
+            self.numeric_controls[label]['input'].set_value(value)
+        if original_callback:
+            original_callback(value)
+
+    def apply_numeric_value(self, label, value):
+        """
+        Numeric input is authoritative; update slider and callbacks.
+        """
+        # Clamp through numeric config
+        cfg = self.numeric_configs.get(label, {'min': value, 'max': value})
+        value = max(cfg['min'], min(cfg['max'], value))
+        # Update slider
+        slider_obj = getattr(self, f"slider_{label.replace(' ', '_')}", None)
+        slider_info = self.sliders.get(label, {})
+        if slider_obj:
+            slider_obj.value = value
+            slider_obj.handle_x = slider_obj.get_handle_position()
+        # Update numeric display
+        if label in self.numeric_controls:
+            self.numeric_controls[label]['input'].set_value(value)
+        # Fire callbacks
+        live_cb = slider_info.get('live_callback')
+        release_cb = slider_info.get('release_callback')
+        if live_cb:
+            live_cb(value)
+        if release_cb:
+            release_cb(value)
     
     def handle_event(self, event):
         """
@@ -243,6 +380,19 @@ class SettingsPanel:
         if event.type == pygame.MOUSEBUTTONDOWN:
             if event.button == 1:  # Left click
                 pos = event.pos
+                # Check quick buttons for numeric controls
+                for label, control in self.numeric_controls.items():
+                    for rect, delta in control.get('buttons', []):
+                        if rect.collidepoint(pos):
+                            current = control['input'].value
+                            if delta == "half":
+                                new_val = max(1, current // 2)
+                            elif delta == "double":
+                                new_val = current * 2
+                            else:
+                                new_val = current + delta
+                            self.apply_numeric_value(label, new_val)
+                            return
                 # Check if clicking on any selection box
                 for key, data in self.selections.items():
                     if data['rect'] and data['rect'].collidepoint(pos):
@@ -251,8 +401,17 @@ class SettingsPanel:
                         next_index = (current_index + 1) % len(data['options'])
                         data['selected'] = data['options'][next_index]
                         # Update the game setting
-                        self.game.shape = data['selected']
-                        self.game.create_grid()
+                        if key == 'Grid Shape':
+                            self.game.shape = data['selected']
+                            # Re-sanitise rules to new max_n
+                            self.apply_settings()
+                            self.game.create_grid()
+                        elif key == 'Triangle Neighborhood':
+                            self.game.triangle_mode = data['selected']
+                            # Apply only if currently on triangle
+                            if self.game.shape == 'triangle':
+                                self.apply_settings()
+                                self.game.create_grid()
                 # Check if any button is clicked
                 for key, rect in self.buttons.items():
                     if rect and rect.collidepoint(pos):
@@ -292,6 +451,10 @@ class SettingsPanel:
             self.scroll_y = max(0, min(self.scroll_y, self.get_max_scroll()))
             self.update_scrollbar()
 
+        # Pass events to numeric inputs
+        for label, control in self.numeric_controls.items():
+            control['input'].handle_event(event)
+
         # Pass events to sliders
         for label, slider_info in self.sliders.items():
             slider_obj = getattr(self, f"slider_{label.replace(' ', '_')}", None)
@@ -302,6 +465,14 @@ class SettingsPanel:
         """
         Apply the settings from the input fields to the game.
         """
+        max_n = get_max_neighbors(self.game.shape, getattr(self.game, "triangle_mode", "edge+vertex"))
+        warning_msgs = []
+
+        def clean_rules(rule_list):
+            cleaned = sorted({v for v in rule_list if 0 <= v <= max_n})
+            removed = sorted(set(rule_list) - set(cleaned))
+            return cleaned, removed
+
         # Update lifeform rules from input fields
         for idx, rules in self.lifeform_rules.items():
             birth_input = rules['birth_rules']
@@ -315,6 +486,12 @@ class SettingsPanel:
                 birth_rules = []
                 survival_rules = []
 
+            birth_rules, removed_b = clean_rules(birth_rules)
+            survival_rules, removed_s = clean_rules(survival_rules)
+            removed = removed_b + removed_s
+            if removed:
+                warning_msgs.append(f"Removed invalid neighbour values: {', '.join(map(str, sorted(set(removed))))} (max {max_n})")
+
             # Ensure unique lifeform IDs and existence
             if idx <= len(self.game.lifeforms):
                 lifeform = self.game.lifeforms[idx - 1]
@@ -327,6 +504,11 @@ class SettingsPanel:
 
         # Apply settings to the game
         self.game.update_settings()
+
+        # Surface warning if anything was removed
+        if warning_msgs:
+            # Show the last warning message to avoid flicker
+            self.game.tooltip.update(warning_msgs[-1])
 
     def randomise_lifeforms(self):
         """
@@ -409,6 +591,11 @@ class SettingsPanel:
         # Enable clipping to the visible area
         surface.set_clip(pygame.Rect(x, y, width - scrollbar_width, self.visible_height))
 
+        # Limit usable content width so controls don't stretch when the panel is wide
+        max_content_width = 420
+        usable_width = min(width - scrollbar_width - 10, max_content_width)
+        content_right = x + usable_width
+
         # Start drawing content with scroll offset and padding
         current_y = y - self.scroll_y + padding_top
         self.content_height = padding_top  # Initialize content_height with padding
@@ -420,6 +607,20 @@ class SettingsPanel:
         for label, slider_info in self.sliders.items():
             # Create Slider instance if not already created
             slider_obj = getattr(self, f"slider_{label.replace(' ', '_')}", None)
+            quick = self.numeric_configs.get(label, {}).get('quick', [])
+            btn_cols = min(2, len(quick))
+            btn_rows = (len(quick) + 1) // 2 if btn_cols else 0
+            btn_w = 32
+            btn_h = 30
+            btn_gap = 4
+            num_w = 60
+            block_width = num_w
+            if quick:
+                block_width += btn_gap + btn_cols * btn_w + (btn_cols - 1) * btn_gap
+            start_x = content_right - block_width
+            slider_width = max(40, start_x - (x + 10) - 10)
+            slider_width = min(slider_width, 300)  # avoid over-stretching the track
+
             if not slider_obj:
                 slider_obj = Slider(
                     label=label,
@@ -428,20 +629,67 @@ class SettingsPanel:
                     current_val=slider_info['value'],
                     x=x + 10,
                     y=current_y,
-                    width=width - 40,
+                    width=slider_width,
                     height=15,
                     font=self.font,
-                    live_callback=slider_info.get('live_callback'),
+                    live_callback=lambda val, l=label, cb=slider_info.get('live_callback'): self.on_slider_change(l, val, cb),
                     release_callback=slider_info.get('release_callback')
                 )
                 setattr(self, f"slider_{label.replace(' ', '_')}", slider_obj)
+                # Create numeric input paired with this slider if configured
+                if label in self.numeric_configs:
+                    cfg = self.numeric_configs[label]
+                    num_input = NumericInput(
+                        value=slider_info['value'],
+                        min_val=cfg['min'],
+                        max_val=cfg['max'],
+                        font=self.font,
+                        commit_callback=lambda val, l=label: self.apply_numeric_value(l, val)
+                    )
+                    self.numeric_controls[label] = {'input': num_input, 'buttons': []}
 
             slider_obj.rect.y = current_y  # Update y-position based on scroll
+            slider_obj.rect.width = slider_width
             slider_obj.handle_y = current_y + slider_obj.handle_radius
             slider_obj.handle_x = slider_obj.get_handle_position()
             slider_obj.draw(surface)
-            current_y += 60
-            self.content_height += 60
+
+            # Draw numeric input and quick buttons
+            if label in self.numeric_controls:
+                num_rect = pygame.Rect(
+                    start_x,
+                    current_y + 32,
+                    60,
+                    30
+                )
+                self.numeric_controls[label]['input'].draw(surface, num_rect)
+                self.numeric_controls[label]['input'].rect = num_rect
+
+                # Quick buttons row
+                btns = []
+                quick = self.numeric_configs[label]['quick']
+                btn_x = num_rect.right + btn_gap
+                btn_y = num_rect.y
+                for idx, q in enumerate(quick):
+                    col = idx % 2
+                    row = idx // 2
+                    rect = pygame.Rect(btn_x + col * (btn_w + btn_gap), btn_y + row * (btn_h + btn_gap), btn_w, btn_h)
+                    pygame.draw.rect(surface, BUTTON_COLOR, rect, border_radius=3)
+                    pygame.draw.rect(surface, TEXT_COLOR, rect, 1, border_radius=3)
+                    label_text = ""
+                    if isinstance(q, str):
+                        label_text = "÷2" if q == "half" else "×2"
+                    else:
+                        label_text = f"{'+' if q>0 else ''}{q}"
+                    txt_surf = self.font.render(label_text, True, TEXT_COLOR)
+                    txt_rect = txt_surf.get_rect(center=rect.center)
+                    surface.blit(txt_surf, txt_rect)
+                    btns.append((rect, q))
+                    btn_x += btn_w + 4
+                self.numeric_controls[label]['buttons'] = btns
+
+            current_y += 90
+            self.content_height += 90
 
         # Draw Selection Fields
         for label, data in self.selections.items():
@@ -467,6 +715,13 @@ class SettingsPanel:
 
             current_y += line_height + 20
             self.content_height += line_height + 20
+
+            if label == 'Triangle Neighborhood':
+                max_n = get_max_neighbors('triangle', data['selected'])
+                note = self.font.render(f"Max neighbors: {max_n}", True, TEXT_COLOR)
+                surface.blit(note, (x + 10, current_y))
+                current_y += line_height + 10
+                self.content_height += line_height + 10
 
         # Draw Buttons with hover effect
         button_height = 30
@@ -505,13 +760,14 @@ class SettingsPanel:
         self.content_height += 10
         for lifeform_id, rules in self.lifeform_rules.items():
             # Lifeform Header
-            lf_header = self.font.render(f'Lifeform {lifeform_id} Rules', True, TEXT_COLOR)
+            max_n = get_max_neighbors(self.game.shape, getattr(self.game, "triangle_mode", "edge+vertex"))
+            lf_header = self.font.render(f'Lifeform {lifeform_id} Rules (0-{max_n})', True, TEXT_COLOR)
             surface.blit(lf_header, (x + 10, current_y))
             current_y += line_height + 5
             self.content_height += line_height + 5
 
             # Birth Rules Input
-            label_text = self.font.render('  Birth Rules (e.g., 3,6)', True, TEXT_COLOR)
+            label_text = self.font.render(f'  Birth Rules (0-{max_n})', True, TEXT_COLOR)
             surface.blit(label_text, (x + 10, current_y))
             current_y += line_height
 
@@ -535,7 +791,7 @@ class SettingsPanel:
             self.content_height += line_height + 20
 
             # Survival Rules Input
-            label_text = self.font.render('  Survival Rules (e.g., 2,3)', True, TEXT_COLOR)
+            label_text = self.font.render(f'  Survival Rules (0-{max_n})', True, TEXT_COLOR)
             surface.blit(label_text, (x + 10, current_y))
             current_y += line_height
 

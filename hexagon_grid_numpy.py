@@ -59,15 +59,7 @@ class HexagonGridNumpy(SquareGrid):
         """
         Create the hexagonal grid of cells and distribute initial live cells among lifeforms.
         """
-        # Calculate cell size based on available space and grid dimensions
-        if self.available_width and self.available_height:
-            # For flat-topped hexagons
-            # Approximate calculation for cell size
-            cell_width_approx = self.available_width / (self.grid_width * 1.5)
-            cell_height_approx = self.available_height / (self.grid_height * math.sqrt(3))
-            self.cell_size = int(min(cell_width_approx, cell_height_approx))
-        else:
-            self.cell_size = 10  # Default cell size
+        self.resize(self.available_width, self.available_height)
 
         # Initialize grid state
         self.grid = np.zeros((self.grid_height, self.grid_width), dtype=np.int8)
@@ -216,3 +208,16 @@ class HexagonGridNumpy(SquareGrid):
         x = self.cell_size * 1.5 * col
         y = self.cell_size * math.sqrt(3) * (row + 0.5 * (col & 1))
         return x, y
+
+    def resize(self, available_width=None, available_height=None):
+        """
+        Recompute cell size on window resize without resetting state.
+        """
+        self.available_width = available_width
+        self.available_height = available_height
+        if self.available_width and self.available_height:
+            cell_width_approx = self.available_width / (self.grid_width * 1.5)
+            cell_height_approx = self.available_height / (self.grid_height * math.sqrt(3))
+            self.cell_size = int(min(cell_width_approx, cell_height_approx))
+        else:
+            self.cell_size = 10  # Default cell size

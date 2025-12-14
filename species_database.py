@@ -4,15 +4,17 @@ import sqlite3
 import random
 
 import itertools
+from neighbor_utils import get_max_neighbors
 
 def generate_species():
     species_list = []
-    neighbor_counts = range(9)  # Neighbor counts from 0 to 8
+    max_n = get_max_neighbors('square')
+    neighbor_counts = range(max_n + 1)  # Neighbor counts from 0 to max
 
     # Generate all possible birth rule combinations
     birth_rule_combinations = []
-    for i in range(512):  # 2^9 possible combinations
-        birth_rule = [int(bit) for bit in bin(i)[2:].zfill(9)]
+    for i in range(2 ** (max_n + 1)):  # combinations across counts
+        birth_rule = [int(bit) for bit in bin(i)[2:].zfill(max_n + 1)]
         birth_rule_combinations.append([idx for idx, bit in enumerate(birth_rule) if bit])
 
     # Generate all possible survival rule combinations (same as birth rules)
@@ -22,8 +24,8 @@ def generate_species():
     for birth_rules in birth_rule_combinations:
         for survival_rules in survival_rule_combinations:
             # Create a unique name or identifier for the species
-            birth_bits = ''.join(['1' if i in birth_rules else '0' for i in range(9)])
-            survival_bits = ''.join(['1' if i in survival_rules else '0' for i in range(9)])
+            birth_bits = ''.join(['1' if i in birth_rules else '0' for i in range(max_n + 1)])
+            survival_bits = ''.join(['1' if i in survival_rules else '0' for i in range(max_n + 1)])
             species_name = birth_bits + survival_bits
 
             species_list.append((

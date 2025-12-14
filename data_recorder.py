@@ -127,15 +127,18 @@ class DataRecorder:
             self.conn.commit()
         
     def insert_record(self, generation, lifeform_id, birth_rules, survival_rules, alive_count, static_count, shape, metrics):
-        lifeform_profile = ''.join(map(str, birth_rules)) + ''.join(map(str, survival_rules))
+        # birth_rules/survival_rules are lists of ints (not padded bits)
+        birth_str = ','.join(map(str, sorted(birth_rules)))
+        survival_str = ','.join(map(str, sorted(survival_rules)))
+        lifeform_profile = f"B{birth_str}/S{survival_str}|{shape}"
         self.meta_buffer.add((self.session_id, lifeform_id, lifeform_profile))
         
         self.record_buffer.append((
             self.session_id,
             generation,
             lifeform_id,
-            ','.join(map(str, birth_rules)),
-            ','.join(map(str, survival_rules)),
+            birth_str,
+            survival_str,
             alive_count,
             static_count,
             shape,

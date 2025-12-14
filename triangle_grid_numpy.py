@@ -118,13 +118,7 @@ class TriangleGridNumpy(SquareGrid):
         """
         Create the triangular grid of cells and distribute initial live cells among lifeforms.
         """
-        # Calculate cell size based on available space and grid dimensions
-        if self.available_width and self.available_height:
-            cell_width = self.available_width / ((self.grid_width + 1) / 2)
-            cell_height = self.available_height / (self.grid_height * (math.sqrt(3) / 2))
-            self.cell_size = int(min(cell_width, cell_height))
-        else:
-            self.cell_size = 10  # Default cell size
+        self.resize(self.available_width, self.available_height)
 
         # Initialize grid state
         self.grid = np.zeros((self.grid_height, self.grid_width), dtype=np.int8)
@@ -253,3 +247,16 @@ class TriangleGridNumpy(SquareGrid):
                             self.grid[r, c] = 1
                             self.grid_lifespans[r, c] = 1
                     return
+
+    def resize(self, available_width=None, available_height=None):
+        """
+        Recompute cell size on window resize without resetting state.
+        """
+        self.available_width = available_width
+        self.available_height = available_height
+        if self.available_width and self.available_height:
+            cell_width = self.available_width / ((self.grid_width + 1) / 2)
+            cell_height = self.available_height / (self.grid_height * (math.sqrt(3) / 2))
+            self.cell_size = int(min(cell_width, cell_height))
+        else:
+            self.cell_size = 10  # Default cell size

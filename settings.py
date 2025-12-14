@@ -6,8 +6,8 @@ WINDOW_HEIGHT = 800
 FPS = 30  # Default FPS
 
 # Grid settings
-#GRID_SIZE = 'extra_large'  # Options: 'small', 'medium', 'large', 'extra_large'
 DEFAULT_SHAPE = 'triangle'  # Options: 'triangle', 'square', 'hexagon'
+DEFAULT_TRIANGLE_MODE = 'edge+vertex'  # Options: 'edge', 'edge+vertex'
 
 # Cell settings
 CELL_SIZE_TRIANGLE = 8  # Size for triangular cells

@@ -35,6 +35,19 @@ class SquareGrid:
         
         self.create_grid()
 
+    def resize(self, available_width=None, available_height=None):
+        """
+        Recompute cell size when the window is resized without resetting state.
+        """
+        self.available_width = available_width
+        self.available_height = available_height
+        if self.available_width and self.available_height:
+            cell_width = self.available_width / self.grid_width
+            cell_height = self.available_height / self.grid_height
+            self.cell_size = int(min(cell_width, cell_height))
+        else:
+            self.cell_size = 10
+
     def calculate_offsets(self, start_x=0, start_y=0):
         self.offset_x = start_x
         self.offset_y = start_y
