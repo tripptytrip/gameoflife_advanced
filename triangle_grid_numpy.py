@@ -14,30 +14,105 @@ class TriangleGridNumpy(SquareGrid):
     """
 
     def __init__(self, lifeforms=None, initial_alive_percentage=0.5,
-                 grid_width=50, grid_height=50, available_width=None, available_height=None):
+                 grid_width=50, grid_height=50, available_width=None, available_height=None, wrap=True, neighborhood_mode="edge+vertex"):
         """
         Initialize the triangle grid based on the specified grid size and lifeforms.
         """
+        self.wrap = wrap
+        self.neighborhood_mode = neighborhood_mode.lower()  # "edge" or "edge+vertex"
+        if self.neighborhood_mode not in ("edge", "edge+vertex"):
+            raise ValueError(f"Unsupported triangle neighborhood mode: {neighborhood_mode}")
         super().__init__(lifeforms, initial_alive_percentage, grid_width, grid_height, available_width, available_height)
+        self._build_neighbor_offsets()
         self._create_neighbor_map()
+
+    def _triangle_corners(self, r, c, upward, size=2.0):
+        """
+        Compute triangle corners for a notional triangle at (r, c).
+        Used only for adjacency discovery.
+        """
+        x0 = c * (size / 2)
+        y0 = r * (size * math.sqrt(3) / 2)
+        half_size = size / 2
+        height = size * math.sqrt(3) / 2
+        if upward:
+            corners = [
+                (x0, y0 - height / 2),
+                (x0 - half_size, y0 + height / 2),
+                (x0 + half_size, y0 + height / 2),
+            ]
+        else:
+            corners = [
+                (x0, y0 + height / 2),
+                (x0 - half_size, y0 - height / 2),
+                (x0 + half_size, y0 - height / 2),
+            ]
+        return [(round(cx, 6), round(cy, 6)) for cx, cy in corners]
+
+    def _build_neighbor_offsets(self):
+        """
+        Precompute relative neighbor offsets for upward/downward triangles based on the mode.
+        """
+        def add_offsets(origin_corners, base_r, base_c):
+            offsets = set()
+            for dr in range(-3, 4):
+                for dc in range(-3, 4):
+                    if dr == 0 and dc == 0:
+                        continue
+                    nr = base_r + dr
+                    nc = base_c + dc
+                    neighbor_upward = (nr + nc) % 2 == 0
+                    corners = self._triangle_corners(nr, nc, neighbor_upward)
+                    shared_vertices = set(origin_corners) & set(corners)
+                    if self.neighborhood_mode == "edge":
+                        if len(shared_vertices) >= 2:
+                            offsets.add((dr, dc))
+                    else:  # edge+vertex
+                        if len(shared_vertices) >= 1:
+                            offsets.add((dr, dc))
+            return offsets
+
+        # Use coordinate origins that match orientation parity
+        base_up_r, base_up_c = 0, 0  # even parity
+        base_down_r, base_down_c = 0, 1  # odd parity
+        origin_up = self._triangle_corners(base_up_r, base_up_c, True)
+        origin_down = self._triangle_corners(base_down_r, base_down_c, False)
+
+        self.offsets_up = add_offsets(origin_up, base_up_r, base_up_c)
+        self.offsets_down = add_offsets(origin_down, base_down_r, base_down_c)
+        if len(self.offsets_up) != len(self.offsets_down):
+            raise ValueError("Triangle neighbor offsets differ between orientations")
+        # Consistency metadata
+        self.neighbor_count = len(self.offsets_up)
 
     def _create_neighbor_map(self):
         self.neighbor_map = {}
+        neighbor_lists = []
         for r in range(self.grid_height):
             for c in range(self.grid_width):
                 neighbors = []
-                # Upward pointing triangle
-                if (c + r) % 2 == 0:
-                    offsets = [(0, -1), (0, 1), (-1, 0)]
-                # Downward pointing triangle
-                else:
-                    offsets = [(0, -1), (0, 1), (1, 0)]
-                
+                upward = (c + r) % 2 == 0
+                offsets = self.offsets_up if upward else self.offsets_down
+
                 for dr, dc in offsets:
                     nr, nc = r + dr, c + dc
-                    if 0 <= nr < self.grid_height and 0 <= nc < self.grid_width:
+                    if self.wrap:
+                        nr %= self.grid_height
+                        nc %= self.grid_width
                         neighbors.append(nr * self.grid_width + nc)
-                self.neighbor_map[r * self.grid_width + c] = neighbors
+                    else:
+                        if 0 <= nr < self.grid_height and 0 <= nc < self.grid_width:
+                            neighbors.append(nr * self.grid_width + nc)
+                cell_index = r * self.grid_width + c
+                self.neighbor_map[cell_index] = neighbors
+                neighbor_lists.append(neighbors)
+
+        # Dense neighbor array for vectorized counting
+        self.max_degree = max((len(n) for n in neighbor_lists), default=0)
+        num_cells = self.grid_width * self.grid_height
+        self.neighbor_indices = -np.ones((num_cells, self.max_degree), dtype=np.int32)
+        for idx, lst in enumerate(neighbor_lists):
+            self.neighbor_indices[idx, : len(lst)] = lst
 
     def create_grid(self):
         """
@@ -74,14 +149,17 @@ class TriangleGridNumpy(SquareGrid):
     def update(self):
         is_alive = self.grid > 0
         flat_grid = self.grid.ravel()
+
+        # Vectorized neighbor counts
+        padded = np.pad(flat_grid, (0, 1))  # last index used for padding (-1 entries)
+        neighbor_idx = np.where(self.neighbor_indices >= 0, self.neighbor_indices, flat_grid.size)
+        neighbor_vals = padded[neighbor_idx]
         
         neighbor_counts = {}
         for lifeform in self.lifeforms:
-            lifeform_mask = flat_grid == lifeform.id
-            neighbor_counts[lifeform.id] = np.zeros_like(flat_grid, dtype=np.int8)
-            for i in range(len(flat_grid)):
-                neighbors = self.neighbor_map[i]
-                neighbor_counts[lifeform.id][i] = np.sum(lifeform_mask[neighbors])
+            life_mask = (neighbor_vals == lifeform.id).astype(np.int8)
+            counts = life_mask.sum(axis=1)
+            neighbor_counts[lifeform.id] = counts
 
         neighbor_counts_grid = {lf: counts.reshape(self.grid.shape) for lf, counts in neighbor_counts.items()}
         
@@ -175,4 +253,3 @@ class TriangleGridNumpy(SquareGrid):
                             self.grid[r, c] = 1
                             self.grid_lifespans[r, c] = 1
                     return
-

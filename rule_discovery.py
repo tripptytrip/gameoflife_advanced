@@ -5,11 +5,11 @@ import random
 import json
 import os
 import time
-import numpy as np
 
-from square_grid import SquareGrid
-from data_recorder import evaluate_rule_criticality
 from lifeform import Lifeform
+from rules import Rule
+from experiments.runner import make_grid, run_timeseries, run_damage_spreading
+from analysis.criticality_score import score_timeseries
 
 # --- Constants for the Genetic Algorithm ---
 POPULATION_SIZE = 20
@@ -17,31 +17,47 @@ NUM_PARENTS = 5
 GRID_SIZE = 64
 NUM_FRAMES = 200
 MUTATION_RATE = 1  # Number of bits to flip
+# Lattice config
+SHAPE = "square"  # Options: square, hexagon, triangle
+TRIANGLE_MODE = "edge+vertex"
+def _neighbor_count_for_shape(shape: str, triangle_mode: str) -> int:
+    if shape == "square":
+        return 8
+    if shape == "hexagon":
+        return 6
+    if shape == "triangle":
+        return 12 if triangle_mode == "edge+vertex" else 3
+    raise ValueError(f"Unsupported shape {shape}")
+
+NEIGHBOR_COUNT = _neighbor_count_for_shape(SHAPE, TRIANGLE_MODE)
+GENE_LENGTH = 2 * (NEIGHBOR_COUNT + 1)
 
 # A lock to prevent race conditions when writing to the JSON file
 file_lock = threading.Lock()
 
-# --- Genome Representation ---
+# --- Genome Representation (length depends on neighbor count) ---
 
-def rules_to_gene(birth_rules, survival_rules):
-    """Converts B/S rules (lists of ints) to an 18-bit gene string."""
-    gene = ['0'] * 18
-    for b in birth_rules:
-        gene[b] = '1'
-    for s in survival_rules:
-        gene[s + 9] = '1'
+def rule_to_gene(rule: Rule, N: int) -> str:
+    """Converts a Rule to a gene string of length 2*(N+1)."""
+    gene = ['0'] * (2 * (N + 1))
+    for b in rule.birth:
+        if 0 <= b <= N:
+            gene[b] = '1'
+    for s in rule.survive:
+        if 0 <= s <= N:
+            gene[s + N + 1] = '1'
     return "".join(gene)
 
-def gene_to_rules(gene):
-    """Converts an 18-bit gene string to B/S rules."""
-    birth_rules = [i for i, bit in enumerate(gene[:9]) if bit == '1']
-    survival_rules = [i for i, bit in enumerate(gene[9:]) if bit == '1']
-    return birth_rules, survival_rules
+def gene_to_rule(gene: str, N: int) -> Rule:
+    """Converts a gene string to a Rule."""
+    birth_rules = {i for i, bit in enumerate(gene[: N + 1]) if bit == '1'}
+    survival_rules = {i for i, bit in enumerate(gene[N + 1 :]) if bit == '1'}
+    return Rule(birth=birth_rules, survive=survival_rules)
 
 def format_rule_string(gene):
     """Formats a gene into a standard B/S string."""
-    b, s = gene_to_rules(gene)
-    return f"B{''.join(map(str, b))}/S{''.join(map(str, s))}"
+    rule = gene_to_rule(gene, NEIGHBOR_COUNT)
+    return rule.to_bs_string(NEIGHBOR_COUNT)
 
 # --- File Operations ---
 
@@ -52,8 +68,9 @@ def save_rule(gene, score):
 
     with file_lock:
         rules = []
-        if os.path.exists('discovered_rules.json'):
-            with open('discovered_rules.json', 'r') as f:
+        filename = f"discovered_rules_{SHAPE}.json"
+        if os.path.exists(filename):
+            with open(filename, 'r') as f:
                 try:
                     rules = json.load(f)
                 except json.JSONDecodeError:
@@ -61,7 +78,7 @@ def save_rule(gene, score):
 
         if rule_str not in rules:
             rules.append(rule_str)
-            with open('discovered_rules.json', 'w') as f:
+            with open(filename, 'w') as f:
                 json.dump(rules, f, indent=4)
 
 # --- Genetic Algorithm Core ---
@@ -70,42 +87,43 @@ def run_simulation_for_gene(gene):
     """
     Runs a simulation for a given gene and returns its fitness score.
     """
-    birth_rules, survival_rules = gene_to_rules(gene)
+    rule = gene_to_rule(gene, NEIGHBOR_COUNT)
+    birth_rules = sorted(rule.birth)
+    survival_rules = sorted(rule.survive)
 
     # Handle invalid rules (no birth or no survival)
     if not birth_rules or not survival_rules:
         return 0.0
 
     lifeform = Lifeform(lifeform_id=1, birth_rules=birth_rules, survival_rules=survival_rules)
-    grid = SquareGrid(
-        lifeforms=[lifeform],
-        grid_width=GRID_SIZE,
-        grid_height=GRID_SIZE,
-        initial_alive_percentage=0.5
+    grid = make_grid(
+        shape=SHAPE,
+        lifeform=lifeform,
+        width=GRID_SIZE,
+        height=GRID_SIZE,
+        p0=0.5,
+        seed=None,
+        wrap=True,
+        triangle_mode=TRIANGLE_MODE,
     )
 
-    grid_history = []
-    total_cells = grid.grid.size
-
-    for _ in range(NUM_FRAMES):
-        grid_state = (grid.grid > 0).astype(np.uint8)
-        
-        # Early Exit Condition
-        population = np.count_nonzero(grid_state)
-        if population == 0 or population == total_cells:
-            return 0.0 # Extinct or saturated, fitness is 0
-
-        grid_history.append(grid_state)
-        grid.update()
-        
-    # Ensure history is not too short for evaluation
-    if len(grid_history) < 50:
-        return 0.0
-        
-    return evaluate_rule_criticality(grid_history)
+    series = run_timeseries(grid, lifeform_id=lifeform.id, steps=NUM_FRAMES)
+    H = run_damage_spreading(
+        shape=SHAPE,
+        rule=rule,
+        steps=NUM_FRAMES,
+        seed=random.randint(0, 1_000_000),
+        p0=0.5,
+        width=GRID_SIZE,
+        height=GRID_SIZE,
+        wrap=True,
+        triangle_mode=TRIANGLE_MODE,
+        flip_cells=1,
+    )
+    return score_timeseries(series["rho"], series["activity"], series.get("frozen_at"), NUM_FRAMES, H=H)
 
 def mutate(gene):
-    """Flips a random bit in the gene string."""
+    """Flips random bits in the gene string."""
     gene_list = list(gene)
     for _ in range(MUTATION_RATE):
         index_to_flip = random.randint(0, len(gene_list) - 1)
@@ -120,9 +138,8 @@ def discover_rules():
     population = []
     for _ in range(POPULATION_SIZE):
         # Generate random B/S rules and convert to a gene
-        b = sorted(random.sample(range(9), k=random.randint(1, 4)))
-        s = sorted(random.sample(range(9), k=random.randint(1, 4)))
-        population.append(rules_to_gene(b, s))
+        rule = Rule.random(NEIGHBOR_COUNT, p_birth=0.3, p_survive=0.3, rng=random)
+        population.append(rule_to_gene(rule, NEIGHBOR_COUNT))
 
     generation_count = 0
     while True:

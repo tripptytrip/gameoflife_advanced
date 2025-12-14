@@ -24,7 +24,8 @@ class SquareGrid:
         self.grid_height = grid_height
         self.available_width = available_width
         self.available_height = available_height
-        
+        self.neighbor_count = 8  # Moore neighborhood
+
         self.grid = np.zeros((self.grid_height, self.grid_width), dtype=np.int8)
         self.grid_lifespans = np.zeros_like(self.grid)
 
