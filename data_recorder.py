@@ -6,7 +6,6 @@ import numpy as np
 import zlib
 
 
-
 class DataRecorder:
     """
     Handles data recording to the database.
@@ -19,6 +18,7 @@ class DataRecorder:
         self.record_buffer = []
         self.meta_buffer = set()
         self.batch_size = batch_size
+        self._session_meta_recorded = False
     
     def create_tables(self):
         with self.lock:
@@ -83,6 +83,47 @@ class DataRecorder:
                     lifeform_profile TEXT UNIQUE
                 )
             ''')
+
+            # Create session_metadata table to capture environment parameters
+            c.execute('''
+                CREATE TABLE IF NOT EXISTS session_metadata (
+                    session_id TEXT PRIMARY KEY,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    grid_width INTEGER,
+                    grid_height INTEGER,
+                    grid_shape TEXT,
+                    neighborhood_mode TEXT,
+                    initial_alive_percentage REAL,
+                    total_generations INTEGER
+                )
+            ''')
+            self.conn.commit()
+    
+    def record_session_meta(self, grid_width, grid_height, grid_shape, neighborhood_mode, initial_alive_percentage, total_generations=None):
+        """
+        Persist session-level environment parameters once per session_id.
+        """
+        with self.lock:
+            c = self.conn.cursor()
+            c.execute('''
+                INSERT OR REPLACE INTO session_metadata (
+                    session_id,
+                    grid_width,
+                    grid_height,
+                    grid_shape,
+                    neighborhood_mode,
+                    initial_alive_percentage,
+                    total_generations
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                self.session_id,
+                int(grid_width),
+                int(grid_height),
+                str(grid_shape),
+                str(neighborhood_mode),
+                float(initial_alive_percentage),
+                int(total_generations) if total_generations is not None else None
+            ))
             self.conn.commit()
         
     def insert_record(self, generation, lifeform_id, birth_rules, survival_rules, alive_count, static_count, shape, metrics):

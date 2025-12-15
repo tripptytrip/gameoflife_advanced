@@ -118,6 +118,9 @@ class GameOfLife:
         # Initialize Tooltip
         self.tooltip = Tooltip()
 
+        # Capture initial session metadata
+        self.record_session_metadata()
+
     def randomise_lifeforms(self):
         """
         Randomly generate lifeforms with unique birth and survival rules.
@@ -178,6 +181,9 @@ class GameOfLife:
         # Calculate grid offsets based on initial chart position
         self.calculate_grid_offsets()
 
+        # Update session metadata after grid (re)creation
+        self.record_session_metadata()
+
     def calculate_grid_offsets(self):
         padding = 10  # Padding in pixels
 
@@ -187,6 +193,21 @@ class GameOfLife:
         grid_start_x = self.left_panel_width + padding  # Start to the right of the left panel for all shapes
 
         self.grid.calculate_offsets(start_x=grid_start_x, start_y=grid_start_y)
+
+    def record_session_metadata(self):
+        """
+        Store environment parameters for this session so DB rows can be filtered by setup.
+        """
+        neighborhood = self.triangle_mode if self.shape == "triangle" else "N/A"
+        total_gens = getattr(self, "auto_run_generations", None)
+        self.data_recorder.record_session_meta(
+            grid_width=self.grid_width,
+            grid_height=self.grid_height,
+            grid_shape=self.shape,
+            neighborhood_mode=neighborhood,
+            initial_alive_percentage=self.initial_alive_percentage,
+            total_generations=total_gens
+        )
 
     def get_chart_rect(self):
         """
