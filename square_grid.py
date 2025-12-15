@@ -110,12 +110,17 @@ class SquareGrid:
         deaths = 0
 
         lifeform_birth_counts = {lf.id: 0 for lf in self.lifeforms}
+        lifeform_kill_counts = {lf.id: 0 for lf in self.lifeforms}
 
         # Pre-calculate neighbor counts for all lifeforms
         neighbor_counts = {}
         for lifeform in self.lifeforms:
             lifeform_grid = (self.grid == lifeform.id)
             neighbor_counts[lifeform.id] = convolve2d(lifeform_grid, kernel, mode='same', boundary='wrap')
+
+        if self.lifeforms:
+            stacked_counts = np.stack([neighbor_counts[lf.id] for lf in self.lifeforms])
+            total_neighbors_all = stacked_counts.sum(axis=0)
 
         # --- Birth Logic ---
         dead_cells = ~is_alive
@@ -157,6 +162,29 @@ class SquareGrid:
             new_lifespans[death_mask] = 0
             deaths += np.sum(death_mask)
 
+            # Kill attribution for overcrowding deaths only
+            if lifeform.survival_rules:
+                max_survive = max(lifeform.survival_rules)
+            else:
+                max_survive = -1
+            death_overcrowd = (neighbor_count > max_survive) & death_mask
+            if self.lifeforms and np.any(death_overcrowd):
+                counts_at = stacked_counts[:, death_overcrowd]
+                # Ignore self counts when picking killer
+                lf_idx = self.lifeforms.index(lifeform)
+                counts_at[lf_idx, :] = -1
+                killer_idx = np.argmax(counts_at, axis=0)
+                killer_vals = np.take_along_axis(counts_at, killer_idx[None, :], axis=0).flatten()
+                total_n = total_neighbors_all[death_overcrowd]
+                majority = killer_vals > (total_n / 2)
+                for k_idx, is_majority in zip(killer_idx, majority):
+                    if not is_majority:
+                        continue
+                    killer_lf = self.lifeforms[k_idx]
+                    if killer_lf.id != lifeform.id:
+                        lifeform_kill_counts[killer_lf.id] += 1
+
+        changed_cells = np.sum(self.grid != new_grid)
         self.grid = new_grid
         self.grid_lifespans = new_lifespans
         
@@ -171,7 +199,7 @@ class SquareGrid:
         
         self.generation += 1
 
-        return births, deaths, static_cells, lifeform_alive_counts, lifeform_static_counts, lifeform_metrics
+        return births, deaths, static_cells, lifeform_alive_counts, lifeform_static_counts, lifeform_metrics, lifeform_kill_counts, changed_cells
 
 
     def handle_click(self, pos):

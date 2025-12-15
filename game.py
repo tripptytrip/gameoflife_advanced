@@ -42,6 +42,9 @@ class GameOfLife:
         self.left_panel_width = LEFT_PANEL_WIDTH
         self._resizing_panel = False
         self._panel_min_width = 220
+        self._skip_step_once = False
+        self._clicked_this_frame = False
+        self._skip_frames = 0
 
         # **Added grid_width and grid_height attributes**
         self.grid_width = 50      # Default grid width
@@ -96,6 +99,12 @@ class GameOfLife:
         self.history_static = [self.current_static]
         self.history_births = [0]
         self.history_deaths = [0]
+        self.total_kills = {lifeform.id: 0 for lifeform in self.lifeforms[:self.number_of_lifeforms]}
+        self.history_kills = {lifeform.id: [0] for lifeform in self.lifeforms[:self.number_of_lifeforms]}
+        self.history_volatility = [0.0]
+        self.crash_alert_message = None
+        self.history_volatility = [0.0]
+        self.crash_alert_message = None
 
         # Initialize lifeform alive counts
         self.lifeform_alive_counts = {lifeform.id: [] for lifeform in self.lifeforms[:self.number_of_lifeforms]}
@@ -157,6 +166,8 @@ class GameOfLife:
         self.history_static = [self.current_static]
         self.history_births = [0]
         self.history_deaths = [0]
+        self.total_kills = {lifeform.id: 0 for lifeform in self.lifeforms[:self.number_of_lifeforms]}
+        self.history_kills = {lifeform.id: [0] for lifeform in self.lifeforms[:self.number_of_lifeforms]}
 
         # Initialize lifeform alive counts
         self.lifeform_alive_counts = {lifeform.id: [] for lifeform in self.lifeforms[:self.number_of_lifeforms]}
@@ -213,7 +224,12 @@ class GameOfLife:
         """
         while True:
             self.handle_events()
-            if not self.is_paused and self.is_running:
+            if self._skip_step_once or self._clicked_this_frame or self._skip_frames > 0:
+                self._skip_step_once = False
+                self._clicked_this_frame = False
+                if self._skip_frames > 0:
+                    self._skip_frames -= 1
+            elif not self.is_paused and self.is_running:
                 self.update_simulation()
             elif self.auto_run_mode:
                 self.auto_run_simulations()
@@ -225,7 +241,7 @@ class GameOfLife:
         """
         Update the simulation by one generation.
         """
-        births, deaths, static_cells, lifeform_alive_counts, lifeform_static_counts, lifeform_metrics = self.grid.update()
+        births, deaths, static_cells, lifeform_alive_counts, lifeform_static_counts, lifeform_metrics, lifeform_kill_counts, changed_cells = self.grid.update()
         self.generation += 1
         self.total_births += births
         self.total_deaths += deaths
@@ -243,6 +259,33 @@ class GameOfLife:
         self.history_static.append(self.current_static)
         self.history_births.append(self.total_births)
         self.history_deaths.append(self.total_deaths)
+        total_cells = self.grid.grid.size if hasattr(self.grid, 'grid') else len(self.grid.cells)
+        alive_norm = max(self.current_alive, 1)
+        volatility_pct = (changed_cells / alive_norm) * 100 if alive_norm else 0
+        self.history_volatility.append(volatility_pct)
+        for lf_id in self.total_kills.keys():
+            self.total_kills[lf_id] += lifeform_kill_counts.get(lf_id, 0)
+            self.history_kills.setdefault(lf_id, []).append(self.total_kills[lf_id])
+        # Keep kill history aligned even if new lifeforms appear
+        for lf in self.lifeforms[:self.number_of_lifeforms]:
+            if lf.id not in self.history_kills:
+                self.history_kills[lf.id] = [0] * len(self.history_generations)
+        # Sudden death detection: >80% drop within last 10 generations
+        if len(self.history_alive) >= 10:
+            prev_alive = self.history_alive[-10]
+            if prev_alive > 0:
+                drop = prev_alive - self.current_alive
+                if drop > 0.8 * prev_alive:
+                    self.is_paused = True
+                    self.is_running = False
+                    self.crash_alert_message = f"Sudden death: gen {self.generation} drop {prev_alive}->{self.current_alive}"
+                    self.tooltip.update(self.crash_alert_message)
+        # Stasis alert: high occupancy, low volatility
+        occupancy = (self.current_alive / total_cells * 100) if total_cells else 0
+        if occupancy > 80 and volatility_pct < 5:
+            self.crash_alert_message = "CRITICAL STASIS DETECTED"
+        else:
+            self.crash_alert_message = None
 
         # Update lifeform alive counts
         self.update_lifeform_alive_counts(lifeform_alive_counts)
@@ -335,6 +378,10 @@ class GameOfLife:
                         self._resizing_panel = True
                         continue
                     self.grid.handle_click(event.pos)
+                    self._clicked_this_frame = True
+                    # Ensure no simulation step is triggered in this frame
+                    self._skip_step_once = True
+                    self._skip_frames = max(self._skip_frames, 2)
                     # Update current alive and dead counts
                     if hasattr(self.grid, 'grid'): #Numpy grid
                         self.current_alive = np.sum(self.grid.grid > 0)
@@ -450,10 +497,13 @@ class GameOfLife:
             self.history_static,
             self.history_births,
             self.history_deaths,
+            self.history_volatility,
         ]:
             trim(lst)
 
         for counts in self.lifeform_alive_counts.values():
+            trim(counts)
+        for counts in self.history_kills.values():
             trim(counts)
 
     def draw(self):
@@ -505,6 +555,8 @@ class GameOfLife:
             f"Current Dead: {self.current_dead}",
             f"Static Cells: {self.current_static}",
         ]
+        if self.crash_alert_message:
+            counts.append(self.crash_alert_message)
         for text in counts:
             counts_text = self.font.render(text, True, TEXT_COLOR)
             self.screen.blit(counts_text, (text_x, y_offset))
@@ -531,17 +583,25 @@ class GameOfLife:
         # Determine max generations
         max_generations = min(self.history_limit, len(self.history_generations))
 
-        # Determine max count for y-axis
+        # Determine max count for y-axis (population/static)
         max_count = max(
             [1] +
             [max(counts[-max_generations:]) if counts[-max_generations:] else 1 for counts in self.lifeform_alive_counts.values()] +
             ([max(self.history_static[-max_generations:]) if self.history_static[-max_generations:] else 1])
         )
 
+        # Determine max for kill axis (separate scale)
+        kill_max = max(
+            [1] +
+            [max(counts[-max_generations:]) if counts[-max_generations:] else 0 for counts in self.history_kills.values()] +
+            [max(self.history_volatility[-max_generations:]) if self.history_volatility[-max_generations:] else 0]
+        )
+
         if len(self.history_generations) > 1:
             # Scaling factors
             x_scale = chart_rect.width / (len(self.history_generations) - 1)
             y_scale = chart_rect.height / max_count
+            kill_y_scale = chart_rect.height / kill_max if kill_max > 0 else chart_rect.height
 
             # Plot lines for each lifeform
             for lifeform in self.lifeforms[:self.number_of_lifeforms]:
@@ -559,11 +619,34 @@ class GameOfLife:
             points_static = [
                 (chart_rect.x + i * x_scale,
                  chart_rect.bottom - data_static[i] * y_scale)
-                for i in range(len(data_static))
+            for i in range(len(data_static))
             ]
             # Define color for static cells line
             color_static_line = (255, 255, 255)  # White color
             pygame.draw.lines(self.screen, color_static_line, False, points_static, 2)
+
+            # Plot kill lines
+            for lifeform in self.lifeforms[:self.number_of_lifeforms]:
+                lf_id = lifeform.id
+                kills = self.history_kills.get(lf_id, [])[-max_generations:]
+                if not kills:
+                    continue
+                points = [
+                    (chart_rect.x + i * x_scale,
+                     chart_rect.bottom - kills[i] * kill_y_scale)
+                    for i in range(len(kills))
+                ]
+                pygame.draw.lines(self.screen, lifeform.color_static, False, points, 1)
+
+            # Plot volatility line (right axis)
+            vol_color = (255, 215, 0)  # Gold
+            vol_data = self.history_volatility[-max_generations:]
+            vol_points = [
+                (chart_rect.x + i * x_scale,
+                 chart_rect.bottom - vol_data[i] * kill_y_scale)
+                for i in range(len(vol_data))
+            ]
+            pygame.draw.lines(self.screen, vol_color, False, vol_points, 2)
 
             # Draw y-axis labels
             y_axis_ticks = 5  # Number of ticks on y-axis
@@ -577,11 +660,23 @@ class GameOfLife:
                 # Draw tick marks
                 pygame.draw.line(self.screen, TEXT_COLOR, (chart_rect.x - 5, y_pos), (chart_rect.x, y_pos))
 
+            # Right y-axis for kills
+            for i in range(y_axis_ticks + 1):
+                y_value = int(i * kill_max / y_axis_ticks)
+                y_pos = chart_rect.bottom - i * chart_rect.height / y_axis_ticks
+                label = self.font.render(str(y_value), True, TEXT_COLOR)
+                label_rect = label.get_rect()
+                label_x = chart_rect.right + 5
+                self.screen.blit(label, (label_x, y_pos - label_rect.height / 2))
+                pygame.draw.line(self.screen, TEXT_COLOR, (chart_rect.right, y_pos), (chart_rect.right + 5, y_pos))
+
             # Add legend
             legend_texts = []
             for lifeform in self.lifeforms[:self.number_of_lifeforms]:
                 legend_texts.append((f"Lifeform {lifeform.id}", lifeform.color_alive))
+                legend_texts.append((f"LF {lifeform.id} Kills", lifeform.color_static))
             legend_texts.append(("Static Cells", color_static_line))
+            legend_texts.append(("Volatility %", vol_color))
 
             for i, (text, color) in enumerate(legend_texts):
                 legend = self.font.render(text, True, color)
