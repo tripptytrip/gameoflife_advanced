@@ -296,8 +296,8 @@ class GameOfLife:
             lifeform_id = lifeform.id
             birth_rules_array = sorted(lifeform.birth_rules)
             survival_rules_array = sorted(lifeform.survival_rules)
-            alive_count = lifeform_alive_counts.get(lifeform_id, 0)
-            static_count = lifeform_static_counts.get(lifeform_id, 0)
+            alive_count = int(lifeform_alive_counts.get(lifeform_id, 0))
+            static_count = int(lifeform_static_counts.get(lifeform_id, 0))
             metrics = lifeform_metrics.get(lifeform_id, {})
             self.data_recorder.insert_record(
                 generation=self.generation,
@@ -451,6 +451,42 @@ class GameOfLife:
         # Update number_of_lifeforms and other settings is handled via callbacks
         # Recreate the grid with updated settings and lifeforms
         self.create_grid()
+
+    def apply_ruleset_to_lifeform(self, lifeform_index, birth_rules_str, survival_rules_str, name=None):
+        """
+        Applies a new ruleset to a specific lifeform and refreshes the game.
+
+        Args:
+            lifeform_index (int): The 0-based index of the lifeform to modify.
+            birth_rules_str (str): A comma-separated string of birth rules.
+            survival_rules_str (str): A comma-separated string of survival rules.
+            name (str, optional): An optional name for the lifeform.
+        """
+        if not (0 <= lifeform_index < len(self.lifeforms)):
+            print(f"Error: Invalid lifeform_index {lifeform_index}")
+            return
+
+        try:
+            # Parse rule strings into lists of integers
+            birth_rules = [int(r.strip()) for r in birth_rules_str.split(',') if r.strip()]
+            survival_rules = [int(r.strip()) for r in survival_rules_str.split(',') if r.strip()]
+        except ValueError as e:
+            print(f"Error parsing rules: {e}")
+            return
+            
+        # Apply the new rules
+        lifeform = self.lifeforms[lifeform_index]
+        lifeform.birth_rules = sorted(birth_rules)
+        lifeform.survival_rules = sorted(survival_rules)
+        if name:
+            lifeform.name = name
+
+        # Update the settings panel UI to reflect the new rules
+        self.settings_panel.update_lifeform_rules()
+        
+        # Reset the grid to apply the changes immediately
+        self.create_grid()
+        print(f"Applied new rules to Lifeform {lifeform.id} and reset grid.")
 
     def update_lifeform_alive_counts(self, lifeform_alive_counts=None, initial=False):
         """

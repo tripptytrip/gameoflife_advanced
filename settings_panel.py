@@ -14,820 +14,313 @@ from settings import (
 )
 from lifeform import Lifeform
 from neighbor_utils import get_max_neighbors
+from db_explorer import query_rows, get_schema, get_row_by_id, get_unique_rules
 
-class NumericInput:
-    """
-    Simple numeric input box with optional callback on commit.
-    """
-    def __init__(self, value, min_val, max_val, font, commit_callback=None):
-        self.value = value
-        self.text = str(value)
-        self.min = min_val
-        self.max = max_val
-        self.font = font
-        self.commit_callback = commit_callback
-        self.active = False
-        self.rect = None
+# ... (Dropdown and NumericInput classes are correct) ...
+class Dropdown:
+    """A dropdown menu UI element."""
+    ITEM_HEIGHT = 28
+    MAX_HEIGHT = 200
+    PADDING_Y = 4
 
-    def clamp(self, val):
-        return max(self.min, min(self.max, val))
+    def __init__(self, options, font, commit_callback=None):
+        self.options, self.font, self.commit_callback = options, font, commit_callback
+        self.active, self.selected_option, self.rect, self.dropdown_rects = False, None, None, []
+        self.scroll_y, self.scroll_speed = 0, 20
 
-    def set_value(self, val, fire_callback=False):
-        val = int(self.clamp(val))
-        self.value = val
-        self.text = str(val)
-        if fire_callback and self.commit_callback:
-            self.commit_callback(val)
-
-    def commit(self):
-        try:
-            val = int(self.text) if self.text else self.value
-        except ValueError:
-            val = self.value
-        val = self.clamp(val)
-        changed = val != self.value
-        self.value = val
-        self.text = str(val)
-        if changed and self.commit_callback:
-            self.commit_callback(val)
-        return changed
-
-    def handle_event(self, event):
+    def handle_event(self, event, parent_scroll_y=0):
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             if self.rect and self.rect.collidepoint(event.pos):
-                self.active = True
-            else:
-                if self.active:
-                    self.commit()
-                self.active = False
-        if not self.active:
-            return
-        if event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_BACKSPACE:
-                self.text = self.text[:-1]
-            elif event.key == pygame.K_RETURN:
-                self.commit()
-                self.active = False
-            elif event.unicode.isdigit():
-                self.text += event.unicode
+                self.active = not self.active
+                self.scroll_y = 0
+            elif self.active:
+                for i, rect in enumerate(self.dropdown_rects):
+                    if rect.collidepoint(event.pos):
+                        self.selected_option = self.options[i]
+                        if self.commit_callback:
+                            self.commit_callback(self.selected_option)
+                        self.active = False
+                        break
+                else:
+                    self.active = False
+        elif self.active and event.type == pygame.MOUSEWHEEL:
+            max_scroll = max(len(self.options) * self.ITEM_HEIGHT - self.MAX_HEIGHT, 0)
+            self.scroll_y -= event.y * self.scroll_speed
+            self.scroll_y = max(0, min(self.scroll_y, max_scroll))
 
     def draw(self, surface, rect):
         self.rect = rect
         pygame.draw.rect(surface, BUTTON_COLOR, rect, border_radius=3)
-        border_color = BUTTON_HOVER_COLOR if self.active else TEXT_COLOR
-        pygame.draw.rect(surface, border_color, rect, 2, border_radius=3)
-        txt_surf = self.font.render(self.text if self.text else "0", True, TEXT_COLOR)
-        txt_rect = txt_surf.get_rect(center=rect.center)
-        surface.blit(txt_surf, txt_rect)
+        pygame.draw.rect(surface, BUTTON_HOVER_COLOR if self.active else TEXT_COLOR, rect, 2, border_radius=3)
+        surface.blit(self.font.render(self.selected_option or "Select a rule...", True, TEXT_COLOR), (rect.x + 5, rect.y + 5))
+
+        if not self.active:
+            return
+
+        self.dropdown_rects = []
+        list_height = min(len(self.options) * self.ITEM_HEIGHT, self.MAX_HEIGHT)
+        list_rect = pygame.Rect(rect.x, rect.bottom + 2, rect.width, list_height)
+        pygame.draw.rect(surface, PANEL_BACKGROUND_COLOR, list_rect, border_radius=4)
+        pygame.draw.rect(surface, BUTTON_COLOR, list_rect, 2, border_radius=4)
+
+        for i, option in enumerate(self.options):
+            y_pos = list_rect.y + i * self.ITEM_HEIGHT - self.scroll_y
+            if y_pos + self.ITEM_HEIGHT < list_rect.y or y_pos > list_rect.bottom:
+                continue
+            option_rect = pygame.Rect(rect.x, y_pos, rect.width, self.ITEM_HEIGHT)
+            self.dropdown_rects.append(option_rect)
+            color = BUTTON_HOVER_COLOR if option_rect.collidepoint(pygame.mouse.get_pos()) else BUTTON_COLOR
+            pygame.draw.rect(surface, color, option_rect, border_radius=3)
+            surface.blit(self.font.render(option, True, TEXT_COLOR), (option_rect.x + 5, option_rect.y + self.PADDING_Y))
+
+class NumericInput:
+    """Simple numeric input box."""
+    def __init__(self, value, min_val, max_val, font, commit_callback=None):
+        self.value, self.text = value, str(value); self.min, self.max = min_val, max_val
+        self.font, self.commit_callback = font, commit_callback
+        self.active, self.rect = False, None
+    def clamp(self, val): return max(self.min, min(self.max, val))
+    def set_value(self, val, fire_callback=False):
+        val = int(self.clamp(val)); self.value, self.text = val, str(val)
+        if fire_callback and self.commit_callback: self.commit_callback(val)
+    def commit(self):
+        try: val = int(self.text) if self.text else self.value
+        except ValueError: val = self.value
+        val = self.clamp(val); changed = val != self.value; self.value, self.text = val, str(val)
+        if changed and self.commit_callback: self.commit_callback(val)
+        return changed
+    def handle_event(self, event):
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            self.active = self.rect and self.rect.collidepoint(event.pos)
+            if self.active is False and self.text != str(self.value): self.commit()
+        if not self.active: return
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_BACKSPACE: self.text = self.text[:-1]
+            elif event.key == pygame.K_RETURN: self.commit(); self.active = False
+            elif event.unicode.isdigit(): self.text += event.unicode
+    def draw(self, surface, rect):
+        self.rect = rect; pygame.draw.rect(surface, BUTTON_COLOR, rect, border_radius=3)
+        pygame.draw.rect(surface, BUTTON_HOVER_COLOR if self.active else TEXT_COLOR, rect, 2, border_radius=3)
+        txt_surf = self.font.render(self.text or "0", True, TEXT_COLOR)
+        surface.blit(txt_surf, txt_surf.get_rect(center=rect.center))
 
 class Slider:
-    """
-    Represents a slider UI element.
-    """
-    def __init__(self, label, min_val, max_val, current_val, x, y, width, height, font,
-                 live_callback=None, release_callback=None):
-        self.label = label
-        self.min = min_val
-        self.max = max_val
-        self.value = current_val
+    """Represents a slider UI element."""
+    def __init__(self, label, min_val, max_val, current_val, x, y, width, height, font, live_callback=None, release_callback=None):
+        self.label, self.min, self.max, self.value = label, min_val, max_val, current_val
         self.rect = pygame.Rect(x, y, width, height)
-        self.handle_radius = height // 2
-        self.handle_x = self.get_handle_position()
-        self.handle_y = y + height // 2
-        self.dragging = False
-        self.font = font
-        # Callback to fire while dragging (live updates)
-        self.live_callback = live_callback
-        # Callback to fire when the user releases the handle (for heavy work)
-        self.release_callback = release_callback
-
-    def get_handle_position(self):
-        """
-        Calculate the x-position of the slider handle based on current value.
-        """
-        proportion = (self.value - self.min) / (self.max - self.min)
-        return self.rect.x + int(proportion * self.rect.width)
-
+        self.handle_radius = height // 2; self.handle_x, self.handle_y = self.get_handle_position(), y + height // 2
+        self.dragging, self.font = False, font
+        self.live_callback, self.release_callback = live_callback, release_callback
+    def get_handle_position(self): return self.rect.x + int(((self.value - self.min) / (self.max - self.min)) * self.rect.width)
     def handle_event(self, event):
-        """
-        Handle events related to the slider.
-        """
-        if event.type == pygame.MOUSEBUTTONDOWN:
-            if event.button == 1:
-                mouse_x, mouse_y = event.pos
-                distance = ((mouse_x - self.handle_x) ** 2 + (mouse_y - self.handle_y) ** 2) ** 0.5
-                if distance <= self.handle_radius:
-                    self.dragging = True
-        elif event.type == pygame.MOUSEBUTTONUP:
-            if event.button == 1:
-                self.dragging = False
-                if self.release_callback:
-                    self.release_callback(self.value)
-        elif event.type == pygame.MOUSEMOTION:
-            if self.dragging:
-                mouse_x, _ = event.pos
-                # Clamp handle position within the slider track
-                self.handle_x = max(self.rect.x, min(mouse_x, self.rect.x + self.rect.width))
-                # Update value based on handle position
-                proportion = (self.handle_x - self.rect.x) / self.rect.width
-                self.value = int(self.min + proportion * (self.max - self.min))
-                if self.live_callback:
-                    self.live_callback(self.value)
-
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if ((event.pos[0] - self.handle_x)**2 + (event.pos[1] - self.handle_y)**2)**0.5 <= self.handle_radius: self.dragging = True
+        elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            if self.dragging: self.dragging = False; 
+            if self.release_callback: self.release_callback(self.value)
+        elif event.type == pygame.MOUSEMOTION and self.dragging:
+            self.handle_x = max(self.rect.x, min(event.pos[0], self.rect.x + self.rect.width))
+            self.value = int(self.min + ((self.handle_x - self.rect.x) / self.rect.width) * (self.max - self.min))
+            if self.live_callback: self.live_callback(self.value)
     def draw(self, surface):
-        """
-        Draw the slider on the given surface.
-        """
-        # Draw label above the slider
-        label_surf = self.font.render(f"{self.label}", True, TEXT_COLOR)
-        label_rect = label_surf.get_rect(midtop=(self.rect.centerx, self.rect.y - 20))
-        surface.blit(label_surf, label_rect)
-
-        # Draw current value below the slider
-        value_surf = self.font.render(f"{self.value}", True, TEXT_COLOR)
-        value_rect = value_surf.get_rect(midtop=(self.rect.centerx, self.rect.y + self.rect.height + 5))
-        surface.blit(value_surf, value_rect)
-
-        # Draw slider track
+        surface.blit(self.font.render(f"{self.label}", True, TEXT_COLOR), self.font.render(f"{self.label}", True, TEXT_COLOR).get_rect(midtop=(self.rect.centerx, self.rect.y - 20)))
+        surface.blit(self.font.render(f"{self.value}", True, TEXT_COLOR), self.font.render(f"{self.value}", True, TEXT_COLOR).get_rect(midtop=(self.rect.centerx, self.rect.y + self.rect.height + 5)))
         pygame.draw.rect(surface, SCROLLBAR_COLOR, self.rect)
-
-        # Draw slider handle
         pygame.draw.circle(surface, BUTTON_COLOR, (self.handle_x, self.handle_y), self.handle_radius)
         pygame.draw.circle(surface, TEXT_COLOR, (self.handle_x, self.handle_y), self.handle_radius, 2)
 
-
 class SettingsPanel:
-    """
-    Manages the settings panel for adjusting game variables with improved UI elements.
-    """
-
     def __init__(self, game):
-        self.game = game
-        self.font = pygame.font.SysFont(FONT_NAME, FONT_SIZE)
-        self.numeric_controls = {}
+        self.game, self.font = game, pygame.font.SysFont(FONT_NAME, FONT_SIZE)
+        self.active_view = "settings"
+        self.db_path, self.db_table = "species.db", "life_records"
+        self.db_schema, self.db_columns, self.db_rows, self.db_total, self.db_page = {}, [], [], 0, 0
+        self.db_page_size, self.db_sort_by, self.db_sort_dir = 50, "id", "DESC"
+        self.db_filters, self.db_selected_row_id, self.db_loading = {}, None, False
+        self.db_row_rects = []
+        self.db_rule_filter_dropdown = Dropdown([], self.font, commit_callback=self.apply_db_rule_filter)
+        self.scroll_y, self.scroll_speed = 0, 20
+        self.is_dragging, self.drag_start_y = False, 0
+        self.scrollbar_rect, self.handle_rect, self.handle_height = None, None, 0
+        self.content_height, self.visible_height, self.hovered_button = 0, 0, None
         self.setup_panel()
 
-        # Scrollbar attributes
-        self.scroll_y = 0
-        self.scroll_speed = 20  # Pixels per scroll event
-        self.is_dragging = False
-        self.drag_start_y = 0
-        self.scrollbar_rect = None
-        self.handle_rect = None
-        self.handle_height = 0
-
-        # Initialize content and visible heights
-        self.content_height = 0
-        self.visible_height = 0
-
-        # Track hovered button for tooltips
-        self.hovered_button = None
-
     def setup_panel(self):
-        """
-        Initialize input values and labels for the settings panel.
-        """
-        self.sliders = {
-            'Initial Alive Percentage': {
-                'min': 0,
-                'max': 100,
-                'value': int(self.game.initial_alive_percentage * 100),
-                'live_callback': self.update_initial_alive_percentage
-            },
-            'Simulation Speed (FPS)': {
-                'min': 1,
-                'max': 60,
-                'value': self.game.fps,
-                'live_callback': self.update_simulation_speed
-            },
-            'Number of Lifeforms': {
-                'min': 1,
-                'max': 10,
-                'value': self.game.number_of_lifeforms,
-                'release_callback': self.update_number_of_lifeforms
-            },
-            'Grid Width': {  # New slider for grid width
-                'min': 10,
-                'max': 400,
-                'value': self.game.grid_width,
-                'release_callback': self.update_grid_width
-            },
-            'Grid Height': {  # New slider for grid height
-                'min': 10,
-                'max': 200,
-                'value': self.game.grid_height,
-                'release_callback': self.update_grid_height
-            },
-            'Number of Generations': {  # For auto-run
-                'min': 1,
-                'max': 1000,
-                'value': self.game.auto_run_generations,
-                'release_callback': self.update_number_of_generations
-            },
-            'Number of Sessions': {  # For auto-run
-                'min': 1,
-                'max': 100,
-                'value': 1,
-                'release_callback': self.update_number_of_sessions
-            }
+        self.slider_configs = {
+            'Initial Alive Percentage': { 'min_val': 0, 'max_val': 100, 'current_val': int(self.game.initial_alive_percentage * 100), 'live_callback': self.update_initial_alive_percentage },
+            'Simulation Speed (FPS)': { 'min_val': 1, 'max_val': 60, 'current_val': self.game.fps, 'live_callback': self.update_simulation_speed },
+            'Number of Lifeforms': { 'min_val': 1, 'max_val': 10, 'current_val': self.game.number_of_lifeforms, 'release_callback': self.update_number_of_lifeforms },
+            'Grid Width': { 'min_val': 10, 'max_val': 400, 'current_val': self.game.grid_width, 'release_callback': self.update_grid_width },
+            'Grid Height': { 'min_val': 10, 'max_val': 200, 'current_val': self.game.grid_height, 'release_callback': self.update_grid_height },
+            'Number of Generations': { 'min_val': 1, 'max_val': 1000, 'current_val': self.game.auto_run_generations, 'release_callback': self.update_number_of_generations },
+            'Number of Sessions': { 'min_val': 1, 'max_val': 100, 'current_val': 1, 'release_callback': self.update_number_of_sessions }
         }
-
-        # Numeric inputs paired with sliders (number box is authoritative)
+        self.slider_objects = {label: Slider(label=label, x=0, y=0, width=0, height=15, font=self.font, **cfg) for label, cfg in self.slider_configs.items()}
         self.numeric_configs = {
-            'Initial Alive Percentage': {
-                'min': 0, 'max': 100,
-                'quick': [-5, -1, 1, 5]
-            },
-            'Grid Width': {
-                'min': 10, 'max': 400,
-                'quick': [-10, 10]
-            },
-            'Grid Height': {
-                'min': 10, 'max': 200,
-                'quick': [-10, 10]
-            },
-            'Number of Generations': {
-                'min': 1, 'max': 1000,
-                'quick': ['half', 'double']
-            },
-            'Number of Sessions': {
-                'min': 1, 'max': 100,
-                'quick': []
-            },
-            'Simulation Speed (FPS)': {
-                'min': 1, 'max': 60,
-                'quick': []
-            }
+            'Initial Alive Percentage': {'min': 0, 'max': 100, 'quick': [-5, -1, 1, 5]}, 'Grid Width': {'min': 10, 'max': 400, 'quick': [-10, 10]},
+            'Grid Height': {'min': 10, 'max': 200, 'quick': [-10, 10]}, 'Number of Generations': {'min': 1, 'max': 1000, 'quick': ['half', 'double']},
+            'Number of Sessions': {'min': 1, 'max': 100, 'quick': []}, 'Simulation Speed (FPS)': {'min': 1, 'max': 60, 'quick': []}
         }
-
+        self.numeric_controls = {label: {'input': NumericInput(cfg['current_val'], self.numeric_configs[label]['min'], self.numeric_configs[label]['max'], self.font, lambda v, l=label: self.apply_numeric_value(l, v)), 'buttons':[]} for label, cfg in self.slider_configs.items() if label in self.numeric_configs}
         self.selections = {
-            'Grid Shape': {
-                'options': ['triangle', 'square', 'hexagon'],
-                'selected': self.game.shape,
-                'rect': None
-            },
-            'Triangle Neighborhood': {
-                'options': ['edge', 'edge+vertex'],
-                'selected': self.game.triangle_mode,
-                'rect': None
-            }
+            'Grid Shape': { 'options': ['triangle', 'square', 'hexagon'], 'selected': self.game.shape, 'rect': None },
+            'Triangle Neighborhood': { 'options': ['edge', 'edge+vertex'], 'selected': self.game.triangle_mode, 'rect': None }
         }
+        self.buttons = {'Apply': None, 'Randomise Lifeforms': None, 'Auto Run': None, 'DB Explorer': None}
+        self.lifeform_rules = {idx: {'birth_rules': '', 'survival_rules': '', 'birth_rect': None, 'survival_rect': None} for idx in range(1, 11)}
+        self.update_lifeform_rules()
 
-        self.buttons = {
-            'Apply': None,                # Rect will be set during drawing
-            'Randomise Lifeforms': None,  # Rect will be set during drawing
-            'Auto Run': None              # Rect for Auto Run button
-        }
-
-        # Add inputs for lifeform rules
-        self.lifeform_rules = {}
-        for idx in range(1, 11):  # For up to 10 lifeforms
-            self.lifeform_rules[idx] = {
-                'birth_rules': ','.join(map(str, self.game.lifeforms[idx-1].birth_rules)) if idx <= len(self.game.lifeforms) else '',
-                'survival_rules': ','.join(map(str, self.game.lifeforms[idx-1].survival_rules)) if idx <= len(self.game.lifeforms) else '',
-                'birth_rect': None,
-                'survival_rect': None
-            }
-
-    def update_initial_alive_percentage(self, value):
-        """
-        Update the initial alive percentage in the game.
-        """
-        self.game.initial_alive_percentage = value / 100.0
-
-    def update_simulation_speed(self, value):
-        """
-        Update the simulation speed (FPS) in the game.
-        """
-        self.game.fps = value
-
-    def update_number_of_lifeforms(self, value):
-        """
-        Update the number of lifeforms in the game.
-        """
-        self.game.number_of_lifeforms = value
-        # Regenerate lifeforms to match the new count
-        self.game.randomise_lifeforms()
-        self.game.create_grid()
-
-    def update_grid_width(self, value):
-        """
-        Update the grid width in the game.
-        """
-        self.game.grid_width = value
-        self.game.create_grid()
-
-    def update_grid_height(self, value):
-        """
-        Update the grid height in the game.
-        """
-        self.game.grid_height = value
-        self.game.create_grid()
-
-    def update_number_of_generations(self, value):
-        """
-        Update the number of generations for auto-run.
-        """
-        self.game.auto_run_generations = value
+    def update_initial_alive_percentage(self, value): self.game.initial_alive_percentage = value / 100.0
+    def update_simulation_speed(self, value): self.game.fps = value
+    def update_number_of_lifeforms(self, value): self.game.number_of_lifeforms = value; self.game.randomise_lifeforms(); self.game.create_grid()
+    def update_grid_width(self, value): self.game.grid_width = value; self.game.create_grid()
+    def update_grid_height(self, value): self.game.grid_height = value; self.game.create_grid()
+    def update_number_of_generations(self, value): self.game.auto_run_generations = value
+    def update_number_of_sessions(self, value): self.game.auto_run_sessions = value
     
-    def update_number_of_sessions(self, value):
-        """
-        Update the number of sessions for auto-run.
-        """
-        self.game.auto_run_sessions = value
-
-    def on_slider_change(self, label, value, original_callback):
-        """
-        Sync slider to numeric input and propagate callback.
-        """
-        if label in self.numeric_controls:
-            self.numeric_controls[label]['input'].set_value(value)
-        if original_callback:
-            original_callback(value)
+    def on_slider_change(self, label, value):
+        if label in self.numeric_controls: self.numeric_controls[label]['input'].set_value(value)
+        self.slider_configs[label]['live_callback'](value)
 
     def apply_numeric_value(self, label, value):
-        """
-        Numeric input is authoritative; update slider and callbacks.
-        """
-        # Clamp through numeric config
-        cfg = self.numeric_configs.get(label, {'min': value, 'max': value})
-        value = max(cfg['min'], min(cfg['max'], value))
-        # Update slider
-        slider_obj = getattr(self, f"slider_{label.replace(' ', '_')}", None)
-        slider_info = self.sliders.get(label, {})
-        if slider_obj:
-            slider_obj.value = value
-            slider_obj.handle_x = slider_obj.get_handle_position()
-        # Update numeric display
-        if label in self.numeric_controls:
-            self.numeric_controls[label]['input'].set_value(value)
-        # Fire callbacks
-        live_cb = slider_info.get('live_callback')
-        release_cb = slider_info.get('release_callback')
-        if live_cb:
-            live_cb(value)
-        if release_cb:
-            release_cb(value)
+        cfg = self.numeric_configs.get(label, {'min': value, 'max': value}); value = max(cfg['min'], min(cfg['max'], value))
+        if label in self.slider_objects: self.slider_objects[label].value = value; self.slider_objects[label].handle_x = self.slider_objects[label].get_handle_position()
+        if label in self.numeric_controls: self.numeric_controls[label]['input'].set_value(value)
+        slider_info = self.slider_configs.get(label, {})
+        if slider_info.get('live_callback'): slider_info['live_callback'](value)
+        if slider_info.get('release_callback'): slider_info['release_callback'](value)
     
     def handle_event(self, event):
-        """
-        Handle events specific to the settings panel, including sliders and buttons.
-        """
-        if event.type == pygame.MOUSEBUTTONDOWN:
-            if event.button == 1:  # Left click
-                pos = event.pos
-                # Check quick buttons for numeric controls
-                for label, control in self.numeric_controls.items():
-                    for rect, delta in control.get('buttons', []):
-                        if rect.collidepoint(pos):
-                            current = control['input'].value
-                            if delta == "half":
-                                new_val = max(1, current // 2)
-                            elif delta == "double":
-                                new_val = current * 2
-                            else:
-                                new_val = current + delta
-                            self.apply_numeric_value(label, new_val)
-                            return
-                # Check if clicking on any selection box
-                for key, data in self.selections.items():
+        if self.active_view == "settings":
+            for control in self.numeric_controls.values(): control['input'].handle_event(event)
+            for slider in self.slider_objects.values(): slider.handle_event(event)
+        elif self.active_view == "db_explorer":
+            self.db_rule_filter_dropdown.handle_event(event)
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            pos = event.pos
+            for key, rect in self.buttons.items():
+                if rect and rect.collidepoint(pos):
+                    if key == 'DB Explorer': self.active_view = 'db_explorer'; self.refresh_db_view(); return
+                    elif key == 'Back to Settings': self.active_view = 'settings'; return
+                    elif key == 'Clear Filter': self.clear_db_filter(); return
+                    elif key == 'Load into Lifeform 1': self.load_selected_rules(); return
+                    elif key == 'Apply': self.apply_settings()
+                    elif key == 'Randomise Lifeforms': self.randomise_lifeforms()
+                    elif key == 'Auto Run': self.auto_run()
+            if self.active_view == "settings":
+                for data in self.selections.values():
                     if data['rect'] and data['rect'].collidepoint(pos):
-                        # Cycle through options
-                        current_index = data['options'].index(data['selected'])
-                        next_index = (current_index + 1) % len(data['options'])
-                        data['selected'] = data['options'][next_index]
-                        # Update the game setting
-                        if key == 'Grid Shape':
-                            self.game.shape = data['selected']
-                            # Re-sanitise rules to new max_n
-                            self.apply_settings()
-                            self.game.create_grid()
-                        elif key == 'Triangle Neighborhood':
-                            self.game.triangle_mode = data['selected']
-                            # Apply only if currently on triangle
-                            if self.game.shape == 'triangle':
-                                self.apply_settings()
-                                self.game.create_grid()
-                # Check if any button is clicked
-                for key, rect in self.buttons.items():
-                    if rect and rect.collidepoint(pos):
-                        if key == 'Apply':
-                            self.apply_settings()
-                        elif key == 'Randomise Lifeforms':
-                            self.randomise_lifeforms()
-                        elif key == 'Auto Run':
-                            self.auto_run()
-                        break
-            elif event.button == 4:  # Scroll up
-                self.scroll_y -= self.scroll_speed
-                self.scroll_y = max(0, self.scroll_y)
-                self.update_scrollbar()
-            elif event.button == 5:  # Scroll down
-                self.scroll_y += self.scroll_speed
-                self.scroll_y = min(self.scroll_y, self.get_max_scroll())
-                self.update_scrollbar()
-
-        elif event.type == pygame.MOUSEBUTTONUP:
-            if event.button == 1:
-                self.is_dragging = False
-
-        elif event.type == pygame.MOUSEMOTION:
-            if self.is_dragging and self.handle_rect:
-                mouse_y = event.pos[1]
-                delta_y = mouse_y - self.drag_start_y
-                self.drag_start_y = mouse_y
-                max_scroll = self.get_max_scroll()
-                self.scroll_y += delta_y * (self.content_height / self.scrollbar_rect.height)
-                self.scroll_y = max(0, min(self.scroll_y, max_scroll))
-                self.update_scrollbar()
-
+                        idx = (data['options'].index(data['selected']) + 1) % len(data['options']); data['selected'] = data['options'][idx]
+                        self.game.shape = self.selections['Grid Shape']['selected']; self.game.triangle_mode = self.selections['Triangle Neighborhood']['selected']
+                        self.apply_settings(); self.game.create_grid(); return
+            elif self.active_view == "db_explorer":
+                for row_rect, row_id in self.db_row_rects:
+                    if row_rect.collidepoint(pos): self.db_selected_row_id = row_id; break
         elif event.type == pygame.MOUSEWHEEL:
-            # Handle scrolling with mouse wheel
             self.scroll_y -= event.y * self.scroll_speed
-            self.scroll_y = max(0, min(self.scroll_y, self.get_max_scroll()))
-            self.update_scrollbar()
+            max_scroll = self.get_max_scroll()
+            self.scroll_y = max(0, min(self.scroll_y, max_scroll))
 
-        # Pass events to numeric inputs
-        for label, control in self.numeric_controls.items():
-            control['input'].handle_event(event)
-
-        # Pass events to sliders
-        for label, slider_info in self.sliders.items():
-            slider_obj = getattr(self, f"slider_{label.replace(' ', '_')}", None)
-            if slider_obj:
-                slider_obj.handle_event(event)
-
-    def apply_settings(self):
-        """
-        Apply the settings from the input fields to the game.
-        """
-        max_n = get_max_neighbors(self.game.shape, getattr(self.game, "triangle_mode", "edge+vertex"))
-        warning_msgs = []
-
-        def clean_rules(rule_list):
-            cleaned = sorted({v for v in rule_list if 0 <= v <= max_n})
-            removed = sorted(set(rule_list) - set(cleaned))
-            return cleaned, removed
-
-        # Update lifeform rules from input fields
-        for idx, rules in self.lifeform_rules.items():
-            birth_input = rules['birth_rules']
-            survival_input = rules['survival_rules']
-
-            try:
-                birth_rules = [int(num.strip()) for num in birth_input.split(',') if num.strip().isdigit()]
-                survival_rules = [int(num.strip()) for num in survival_input.split(',') if num.strip().isdigit()]
-            except ValueError:
-                # If parsing fails, default to empty rules
-                birth_rules = []
-                survival_rules = []
-
-            birth_rules, removed_b = clean_rules(birth_rules)
-            survival_rules, removed_s = clean_rules(survival_rules)
-            removed = removed_b + removed_s
-            if removed:
-                warning_msgs.append(f"Removed invalid neighbour values: {', '.join(map(str, sorted(set(removed))))} (max {max_n})")
-
-            # Ensure unique lifeform IDs and existence
-            if idx <= len(self.game.lifeforms):
-                lifeform = self.game.lifeforms[idx - 1]
-                lifeform.birth_rules = sorted(birth_rules)
-                lifeform.survival_rules = sorted(survival_rules)
-            else:
-                # Create new lifeform if it doesn't exist
-                lifeform = Lifeform(lifeform_id=idx, birth_rules=birth_rules, survival_rules=survival_rules)
-                self.game.lifeforms.append(lifeform)
-
-        # Apply settings to the game
-        self.game.update_settings()
-
-        # Surface warning if anything was removed
-        if warning_msgs:
-            # Show the last warning message to avoid flicker
-            self.game.tooltip.update(warning_msgs[-1])
-
-    def randomise_lifeforms(self):
-        """
-        Randomize lifeform profiles by generating new ones.
-        """
-        self.game.randomise_lifeforms()
-        self.update_lifeform_rules()
-        self.game.create_grid()
-
-    def auto_run(self):
-        """
-        Trigger the auto-run mode in the game.
-        """
-        num_sessions = self.game.auto_run_sessions
-        if num_sessions >= 1:
-            self.game.start_auto_run(num_sessions)
-
+    def apply_settings(self): self.game.create_grid()
     def update_lifeform_rules(self):
-        """
-        Update the lifeform rule inputs based on the game's lifeforms.
-        """
         for idx, lifeform in enumerate(self.game.lifeforms, start=1):
-            if idx > 10:
-                break  # Limit to 10 lifeforms
+            if idx > 10: break
             if idx in self.lifeform_rules:
                 self.lifeform_rules[idx]['birth_rules'] = ','.join(map(str, lifeform.birth_rules))
                 self.lifeform_rules[idx]['survival_rules'] = ','.join(map(str, lifeform.survival_rules))
-
-    def get_max_scroll(self):
-        """
-        Calculate the maximum scroll offset based on content height and visible height.
-        """
-        return max(self.content_height - self.visible_height, 0)
-
-    def update_scrollbar(self):
-        """
-        Update the scrollbar handle based on the current scroll position.
-        """
-        if self.content_height <= self.visible_height:
-            # No need for scrollbar
-            self.handle_rect = None
-            return
-
-        # Calculate handle size proportionally
-        track_height = self.scrollbar_rect.height
-        self.handle_height = max(int(track_height * self.visible_height / self.content_height), 20)
-
-        # Calculate handle position proportionally
-        max_scroll = self.get_max_scroll()
-        proportion = self.scroll_y / max_scroll if max_scroll > 0 else 0
-        handle_y = self.scrollbar_rect.y + int(proportion * (track_height - self.handle_height))
-        self.handle_rect = pygame.Rect(
-            self.scrollbar_rect.x,
-            handle_y,
-            self.scrollbar_rect.width,
-            self.handle_height
-        )
-
+    def randomise_lifeforms(self): self.game.randomise_lifeforms(); self.update_lifeform_rules(); self.game.create_grid()
+    def auto_run(self): 
+        if hasattr(self, 'game') and self.game.auto_run_sessions >= 1: self.game.start_auto_run(self.game.auto_run_sessions)
+    def apply_db_rule_filter(self, selected_rule):
+        if selected_rule: b, s = selected_rule.split('/'); self.db_filters = {"rules": {"birth": b[1:], "survival": s[1:]}}
+        else: self.db_filters = {}
+        self.db_page = 0; self.refresh_db_view()
+    def clear_db_filter(self): self.db_rule_filter_dropdown.selected_option = None; self.db_filters = {}; self.db_page = 0; self.refresh_db_view()
+    def load_selected_rules(self):
+        if self.db_selected_row_id is None: return
+        row = get_row_by_id(self.db_path, self.db_table, self.db_selected_row_id)
+        if not row: return
+        self.game.shape = row['shape']; self.game.apply_ruleset_to_lifeform(0, row['lifeform_birth_rules'], row['lifeform_survival_rules']); self.active_view = "settings"
+    def refresh_db_view(self):
+        if not self.db_schema: self.db_schema = get_schema(self.db_path)
+        if not self.db_rule_filter_dropdown.options: self.db_rule_filter_dropdown.options = [""] + get_unique_rules(self.db_path, self.db_table)
+        offset = self.db_page * self.db_page_size
+        self.db_rows, self.db_total, self.db_columns = query_rows(self.db_path, self.db_table, self.db_filters, self.db_sort_by, self.db_sort_dir, self.db_page_size, offset)
     def draw(self, surface, x, y, width):
-        """
-        Draw the settings panel within the left panel with improved UI.
+        if self.active_view == "db_explorer": self._draw_db_explorer(surface, x, y, width)
+        else: self._draw_settings(surface, x, y, width)
+    def _draw_db_explorer(self, surface, x, y, width):
+        current_y = y + 10; self.db_row_rects = []
+        back_rect = pygame.Rect(x + 10, current_y, width - 40, 30); self.buttons['Back to Settings'] = back_rect
+        pygame.draw.rect(surface, BUTTON_COLOR, back_rect, border_radius=5)
+        surface.blit(self.font.render("Back to Settings", True, TEXT_COLOR), self.font.render("Back to Settings", True, TEXT_COLOR).get_rect(center=back_rect.center)); current_y += 40
+        dropdown_rect = pygame.Rect(x + 10, current_y, width - 100, 30); self.db_rule_filter_dropdown.draw(surface, dropdown_rect)
+        clear_rect = pygame.Rect(dropdown_rect.right + 5, current_y, 80, 30); self.buttons['Clear Filter'] = clear_rect
+        pygame.draw.rect(surface, BUTTON_COLOR, clear_rect, border_radius=3)
+        surface.blit(self.font.render("Clear", True, TEXT_COLOR), self.font.render("Clear", True, TEXT_COLOR).get_rect(center=clear_rect.center)); current_y += 40
+        header_text = f"{'ID':<5} {'Shape':<8} {'Rules'}"; surface.blit(pygame.font.SysFont(FONT_NAME, FONT_SIZE, bold=True).render(header_text, True, TEXT_COLOR), (x + 10, current_y)); current_y += 20
+        if self.db_loading: surface.blit(self.font.render("Loading...", True, TEXT_COLOR), (x + 10, current_y))
+        else:
+            for row in self.db_rows:
+                is_selected = row['id'] == self.db_selected_row_id; row_color = BUTTON_HOVER_COLOR if is_selected else TEXT_COLOR
+                row_text = f"{row['id']:<5} {row['shape']:<8} B{row['lifeform_birth_rules']}/S{row['lifeform_survival_rules']}"
+                row_rect = pygame.Rect(x + 10, current_y, width - 40, 20); self.db_row_rects.append((row_rect, row['id']))
+                surface.blit(self.font.render(row_text, True, row_color), row_rect); current_y += 20
+        if self.db_selected_row_id is not None:
+            load_rect = pygame.Rect(x + 10, surface.get_height() - 40, width - 40, 30); self.buttons['Load into Lifeform 1'] = load_rect
+            pygame.draw.rect(surface, BUTTON_COLOR, load_rect, border_radius=5)
+            surface.blit(self.font.render("Load into Lifeform 1", True, TEXT_COLOR), self.font.render("Load into Lifeform 1", True, TEXT_COLOR).get_rect(center=load_rect.center))
 
-        Args:
-            surface (pygame.Surface): The surface to draw on.
-            x (int): The x-coordinate to start drawing.
-            y (int): The y-coordinate to start drawing.
-            width (int): The width of the area to draw in.
-        """
-        # Define the visible area for the settings panel
-        self.visible_height = surface.get_height() - y  # Assuming y is the top margin
-        self.content_height = 0  # Will calculate as we draw
-
-        # Define padding at the top
-        padding_top = 20  # Adjust this value as needed
-
-        # Define scrollbar properties
-        scrollbar_width = 15
-        self.scrollbar_rect = pygame.Rect(x + width - scrollbar_width, y, scrollbar_width, self.visible_height)
-
-        # Enable clipping to the visible area
+    def _draw_settings(self, surface, x, y, width):
+        self.visible_height, self.content_height = surface.get_height() - y, 0; padding_top = 20
+        scrollbar_width = 15; self.scrollbar_rect = pygame.Rect(x + width - scrollbar_width, y, scrollbar_width, self.visible_height)
         surface.set_clip(pygame.Rect(x, y, width - scrollbar_width, self.visible_height))
-
-        # Limit usable content width so controls don't stretch when the panel is wide
-        max_content_width = 420
-        usable_width = min(width - scrollbar_width - 10, max_content_width)
-        content_right = x + usable_width
-
-        # Start drawing content with scroll offset and padding
-        current_y = y - self.scroll_y + padding_top
-        self.content_height = padding_top  # Initialize content_height with padding
-
-        line_height = 25
-
-        # Draw Sliders
-        for label, slider_info in self.sliders.items():
-            # Create Slider instance if not already created
-            slider_obj = getattr(self, f"slider_{label.replace(' ', '_')}", None)
-            quick = self.numeric_configs.get(label, {}).get('quick', [])
-            btn_cols = min(2, len(quick))
-            btn_rows = (len(quick) + 1) // 2 if btn_cols else 0
-            btn_w = 32
-            btn_h = 30
-            btn_gap = 4
-            num_w = 60
-            block_width = num_w
-            if quick:
-                block_width += btn_gap + btn_cols * btn_w + (btn_cols - 1) * btn_gap
-            start_x = content_right - block_width
-            slider_width = max(40, start_x - (x + 10) - 10)
-            slider_width = min(slider_width, 300)  # avoid over-stretching the track
-
-            if not slider_obj:
-                slider_obj = Slider(
-                    label=label,
-                    min_val=slider_info['min'],
-                    max_val=slider_info['max'],
-                    current_val=slider_info['value'],
-                    x=x + 10,
-                    y=current_y,
-                    width=slider_width,
-                    height=15,
-                    font=self.font,
-                    live_callback=lambda val, l=label, cb=slider_info.get('live_callback'): self.on_slider_change(l, val, cb),
-                    release_callback=slider_info.get('release_callback')
-                )
-                setattr(self, f"slider_{label.replace(' ', '_')}", slider_obj)
-                # Create numeric input paired with this slider if configured
-                if label in self.numeric_configs:
-                    cfg = self.numeric_configs[label]
-                    num_input = NumericInput(
-                        value=slider_info['value'],
-                        min_val=cfg['min'],
-                        max_val=cfg['max'],
-                        font=self.font,
-                        commit_callback=lambda val, l=label: self.apply_numeric_value(l, val)
-                    )
-                    self.numeric_controls[label] = {'input': num_input, 'buttons': []}
-
-            slider_obj.rect.y = current_y  # Update y-position based on scroll
-            slider_obj.rect.width = slider_width
-            slider_obj.handle_y = current_y + slider_obj.handle_radius
-            slider_obj.handle_x = slider_obj.get_handle_position()
-            slider_obj.draw(surface)
-
-            # Draw numeric input and quick buttons
+        current_y = y - self.scroll_y + padding_top; self.content_height = padding_top; line_height = 25
+        max_content_width = 420; usable_width = min(width - scrollbar_width - 10, max_content_width); content_right = x + usable_width
+        for label, slider in self.slider_objects.items():
+            slider.rect.x = x + 10; slider.rect.y = current_y; slider.rect.width = usable_width - 20; slider.handle_y = current_y + slider.handle_radius
+            slider.draw(surface)
             if label in self.numeric_controls:
-                num_rect = pygame.Rect(
-                    start_x,
-                    current_y + 32,
-                    60,
-                    30
-                )
+                num_rect = pygame.Rect(content_right - 60, current_y + 32, 60, 30)
                 self.numeric_controls[label]['input'].draw(surface, num_rect)
-                self.numeric_controls[label]['input'].rect = num_rect
-
-                # Quick buttons row
-                btns = []
-                quick = self.numeric_configs[label]['quick']
-                btn_x = num_rect.right + btn_gap
-                btn_y = num_rect.y
-                for idx, q in enumerate(quick):
-                    col = idx % 2
-                    row = idx // 2
-                    rect = pygame.Rect(btn_x + col * (btn_w + btn_gap), btn_y + row * (btn_h + btn_gap), btn_w, btn_h)
-                    pygame.draw.rect(surface, BUTTON_COLOR, rect, border_radius=3)
-                    pygame.draw.rect(surface, TEXT_COLOR, rect, 1, border_radius=3)
-                    label_text = ""
-                    if isinstance(q, str):
-                        label_text = "÷2" if q == "half" else "×2"
-                    else:
-                        label_text = f"{'+' if q>0 else ''}{q}"
-                    txt_surf = self.font.render(label_text, True, TEXT_COLOR)
-                    txt_rect = txt_surf.get_rect(center=rect.center)
-                    surface.blit(txt_surf, txt_rect)
-                    btns.append((rect, q))
-                    btn_x += btn_w + 4
-                self.numeric_controls[label]['buttons'] = btns
-
-            current_y += 90
-            self.content_height += 90
-
-        # Draw Selection Fields
+            current_y += 90; self.content_height += 90
         for label, data in self.selections.items():
-            # Draw label
-            label_surf = self.font.render(label, True, TEXT_COLOR)
-            surface.blit(label_surf, (x + 10, current_y))
-            current_y += line_height
-
-            # Draw selection box
-            selection_rect = pygame.Rect(
-                x + 10,
-                current_y,
-                width - 40,
-                line_height + 10
-            )
-            data['rect'] = selection_rect  # Update the rect in data for event handling
-            pygame.draw.rect(surface, BUTTON_COLOR, selection_rect)
-            pygame.draw.rect(surface, TEXT_COLOR, selection_rect, 2)
-
-            # Draw selected option
-            selected_text = self.font.render(data['selected'], True, TEXT_COLOR)
-            surface.blit(selected_text, (selection_rect.x + 10, selection_rect.y + 5))
-
-            current_y += line_height + 20
-            self.content_height += line_height + 20
-
-            if label == 'Triangle Neighborhood':
-                max_n = get_max_neighbors('triangle', data['selected'])
-                note = self.font.render(f"Max neighbors: {max_n}", True, TEXT_COLOR)
-                surface.blit(note, (x + 10, current_y))
-                current_y += line_height + 10
-                self.content_height += line_height + 10
-
-        # Draw Buttons with hover effect
-        button_height = 30
-        button_spacing = 15
+            label_surf = self.font.render(label, True, TEXT_COLOR); surface.blit(label_surf, (x + 10, current_y)); current_y += line_height
+            selection_rect = pygame.Rect(x + 10, current_y, width - 40, line_height + 10); data['rect'] = selection_rect
+            pygame.draw.rect(surface, BUTTON_COLOR, selection_rect); pygame.draw.rect(surface, TEXT_COLOR, selection_rect, 2)
+            surface.blit(self.font.render(data['selected'], True, TEXT_COLOR), (selection_rect.x + 10, selection_rect.y + 5)); current_y += line_height + 20; self.content_height += line_height + 20
+        button_height, button_spacing = 30, 15
         for key in self.buttons.keys():
-            rect = pygame.Rect(
-                x + 10,
-                current_y,
-                width - 40,
-                button_height
-            )
-            self.buttons[key] = rect  # Update rect based on current_y
-
-            # Check hover state
-            mouse_pos = pygame.mouse.get_pos()
-            if rect.collidepoint(mouse_pos):
-                color = BUTTON_HOVER_COLOR
-                self.hovered_button = key
-            else:
-                color = BUTTON_COLOR
-
-            # Draw button
-            pygame.draw.rect(surface, color, rect, border_radius=5)
-            pygame.draw.rect(surface, TEXT_COLOR, rect, 2, border_radius=5)
-
-            # Draw button text
-            button_text = self.font.render(key, True, TEXT_COLOR)
-            text_rect = button_text.get_rect(center=rect.center)
-            surface.blit(button_text, text_rect)
-
-            current_y += button_height + button_spacing
-            self.content_height += button_height + button_spacing
-
-        # Draw Lifeform Rules Inputs
-        current_y += 10  # Add some spacing before lifeform rules
-        self.content_height += 10
+            if key in ['Back to Settings', 'Clear Filter', 'Load into Lifeform 1']: continue
+            rect = pygame.Rect(x + 10, current_y, width - 40, button_height); self.buttons[key] = rect
+            color = BUTTON_HOVER_COLOR if rect.collidepoint(pygame.mouse.get_pos()) else BUTTON_COLOR
+            pygame.draw.rect(surface, color, rect, border_radius=5); pygame.draw.rect(surface, TEXT_COLOR, rect, 2, border_radius=5)
+            surface.blit(self.font.render(key, True, TEXT_COLOR), self.font.render(key, True, TEXT_COLOR).get_rect(center=rect.center)); current_y += button_height + button_spacing; self.content_height += button_height + button_spacing
+        current_y += 10; self.content_height += 10
         for lifeform_id, rules in self.lifeform_rules.items():
-            # Lifeform Header
             max_n = get_max_neighbors(self.game.shape, getattr(self.game, "triangle_mode", "edge+vertex"))
-            lf_header = self.font.render(f'Lifeform {lifeform_id} Rules (0-{max_n})', True, TEXT_COLOR)
-            surface.blit(lf_header, (x + 10, current_y))
-            current_y += line_height + 5
-            self.content_height += line_height + 5
-
-            # Birth Rules Input
-            label_text = self.font.render(f'  Birth Rules (0-{max_n})', True, TEXT_COLOR)
-            surface.blit(label_text, (x + 10, current_y))
-            current_y += line_height
-
-            birth_rect = pygame.Rect(
-                x + 20,
-                current_y,
-                width - 60,
-                line_height + 10
-            )
-            rules['birth_rect'] = birth_rect
-
-            # Draw birth rules input box
-            pygame.draw.rect(surface, BUTTON_COLOR, birth_rect)
-            pygame.draw.rect(surface, TEXT_COLOR, birth_rect, 2)
-
-            # Render birth rules text
-            birth_text = self.font.render(rules['birth_rules'], True, TEXT_COLOR)
-            surface.blit(birth_text, (birth_rect.x + 10, birth_rect.y + 5))
-
-            current_y += line_height + 20
-            self.content_height += line_height + 20
-
-            # Survival Rules Input
-            label_text = self.font.render(f'  Survival Rules (0-{max_n})', True, TEXT_COLOR)
-            surface.blit(label_text, (x + 10, current_y))
-            current_y += line_height
-
-            survival_rect = pygame.Rect(
-                x + 20,
-                current_y,
-                width - 60,
-                line_height + 10
-            )
-            rules['survival_rect'] = survival_rect
-
-            # Draw survival rules input box
-            pygame.draw.rect(surface, BUTTON_COLOR, survival_rect)
-            pygame.draw.rect(surface, TEXT_COLOR, survival_rect, 2)
-
-            # Render survival rules text
-            survival_text = self.font.render(rules['survival_rules'], True, TEXT_COLOR)
-            surface.blit(survival_text, (survival_rect.x + 10, survival_rect.y + 5))
-
-            current_y += line_height + 20
-            self.content_height += line_height + 20
-
-        # Remove clipping
+            surface.blit(self.font.render(f'Lifeform {lifeform_id} Rules (0-{max_n})', True, TEXT_COLOR), (x + 10, current_y)); current_y += line_height + 5; self.content_height += line_height + 5
+            surface.blit(self.font.render(f'  Birth Rules (0-{max_n})', True, TEXT_COLOR), (x + 10, current_y)); current_y += line_height
+            birth_rect = pygame.Rect(x + 20, current_y, width - 60, line_height + 10); rules['birth_rect'] = birth_rect
+            pygame.draw.rect(surface, BUTTON_COLOR, birth_rect); pygame.draw.rect(surface, TEXT_COLOR, birth_rect, 2)
+            surface.blit(self.font.render(rules['birth_rules'], True, TEXT_COLOR), (birth_rect.x + 10, birth_rect.y + 5)); current_y += line_height + 20; self.content_height += line_height + 20
+            surface.blit(self.font.render(f'  Survival Rules (0-{max_n})', True, TEXT_COLOR), (x + 10, current_y)); current_y += line_height
+            survival_rect = pygame.Rect(x + 20, current_y, width - 60, line_height + 10); rules['survival_rect'] = survival_rect
+            pygame.draw.rect(surface, BUTTON_COLOR, survival_rect); pygame.draw.rect(surface, TEXT_COLOR, survival_rect, 2)
+            surface.blit(self.font.render(rules['survival_rules'], True, TEXT_COLOR), (survival_rect.x + 10, survival_rect.y + 5)); current_y += line_height + 20; self.content_height += line_height + 20
         surface.set_clip(None)
-
-        # Calculate scrollbar handle
         self.update_scrollbar()
-
-        # Draw scrollbar background
-        pygame.draw.rect(surface, SCROLLBAR_COLOR, self.scrollbar_rect)
-        # Draw scrollbar handle
-        if self.handle_rect:
+        if self.scrollbar_rect and self.handle_rect:
+            pygame.draw.rect(surface, SCROLLBAR_COLOR, self.scrollbar_rect)
             pygame.draw.rect(surface, SCROLLBAR_HANDLE_COLOR, self.handle_rect)
 
-    def update_lifeform_rules(self):
-        """
-        Update the lifeform rule inputs based on the game's lifeforms.
-        """
-        for idx, lifeform in enumerate(self.game.lifeforms, start=1):
-            if idx > 10:
-                break  # Limit to 10 lifeforms
-            if idx in self.lifeform_rules:
-                self.lifeform_rules[idx]['birth_rules'] = ','.join(map(str, lifeform.birth_rules))
-                self.lifeform_rules[idx]['survival_rules'] = ','.join(map(str, lifeform.survival_rules))
+    def get_max_scroll(self): return max(self.content_height - self.visible_height, 0)
+    def update_scrollbar(self):
+        if self.content_height <= self.visible_height: self.handle_rect = None; return
+        track_h = self.scrollbar_rect.height
+        self.handle_height = max(int(track_h * self.visible_height / self.content_height), 20)
+        max_scroll = self.get_max_scroll()
+        prop = self.scroll_y / max_scroll if max_scroll > 0 else 0
+        handle_y = self.scrollbar_rect.y + int(prop * (track_h - self.handle_height))
+        self.handle_rect = pygame.Rect(self.scrollbar_rect.x, handle_y, self.scrollbar_rect.width, self.handle_height)
