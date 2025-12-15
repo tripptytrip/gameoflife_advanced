@@ -112,5 +112,20 @@ def get_unique_rules(db_path, table):
     finally:
         if conn: conn.close()
 
+def get_unique_values(db_path, table, column):
+    """
+    Returns sorted distinct values for a given column, or [] if unavailable.
+    """
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute(f'SELECT DISTINCT "{column}" FROM "{table}" WHERE "{column}" IS NOT NULL')
+        values = sorted([row[0] for row in cursor.fetchall() if row[0] is not None])
+        return values
+    except sqlite3.Error as e:
+        print(f"Database query error: {e}"); return []
+    finally:
+        if conn: conn.close()
+
 if __name__ == '__main__':
     pass

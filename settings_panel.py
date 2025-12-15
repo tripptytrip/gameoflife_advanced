@@ -14,7 +14,7 @@ from settings import (
 )
 from lifeform import Lifeform
 from neighbor_utils import get_max_neighbors
-from db_explorer import query_rows, get_schema, get_row_by_id, get_unique_rules
+from db_explorer import query_rows, get_schema, get_row_by_id, get_unique_values
 
 # ... (Dropdown and NumericInput classes are correct) ...
 class Dropdown:
@@ -72,6 +72,39 @@ class Dropdown:
             color = BUTTON_HOVER_COLOR if option_rect.collidepoint(pygame.mouse.get_pos()) else BUTTON_COLOR
             pygame.draw.rect(surface, color, option_rect, border_radius=3)
             surface.blit(self.font.render(option, True, TEXT_COLOR), (option_rect.x + 5, option_rect.y + self.PADDING_Y))
+
+class TextInput:
+    """Lightweight text input with placeholder support."""
+    def __init__(self, text, font, width=140, placeholder="", commit_callback=None):
+        self.text, self.font, self.width = text, font, width
+        self.placeholder, self.commit_callback = placeholder, commit_callback
+        self.active, self.rect = False, None
+
+    def handle_event(self, event):
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            self.active = self.rect and self.rect.collidepoint(event.pos)
+            if not self.active and self.commit_callback:
+                self.commit_callback()
+        if not self.active:
+            return
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_BACKSPACE:
+                self.text = self.text[:-1]
+            elif event.key == pygame.K_RETURN:
+                if self.commit_callback:
+                    self.commit_callback()
+                self.active = False
+            elif event.unicode:
+                self.text += event.unicode
+
+    def draw(self, surface, rect):
+        self.rect = rect
+        pygame.draw.rect(surface, BUTTON_COLOR, rect, border_radius=4)
+        pygame.draw.rect(surface, BUTTON_HOVER_COLOR if self.active else TEXT_COLOR, rect, 2, border_radius=4)
+        display_text = self.text if self.text else self.placeholder
+        color = TEXT_COLOR if self.text else BUTTON_HOVER_COLOR
+        txt_surf = self.font.render(display_text, True, color)
+        surface.blit(txt_surf, txt_surf.get_rect(midleft=(rect.x + 8, rect.centery)))
 
 class NumericInput:
     """Simple numeric input box."""
@@ -138,8 +171,16 @@ class SettingsPanel:
         self.db_schema, self.db_columns, self.db_rows, self.db_total, self.db_page = {}, [], [], 0, 0
         self.db_page_size, self.db_sort_by, self.db_sort_dir = 50, "id", "DESC"
         self.db_filters, self.db_selected_row_id, self.db_loading = {}, None, False
-        self.db_row_rects = []
-        self.db_rule_filter_dropdown = Dropdown([], self.font, commit_callback=self.apply_db_rule_filter)
+        self.db_row_rects, self.db_result_rects = [], []
+        self.db_scroll_y, self.db_scroll_speed = 0, 20
+        self.db_content_height, self.db_visible_height = 0, 0
+        self.db_scrollbar_rect, self.db_handle_rect, self.db_handle_height = None, None, 0
+        self.db_filters_state = {"shape": None, "neighborhood": None, "signature": ""}
+        self.db_filter_options = {"shape": [], "neighborhood": []}
+        self.db_shape_dropdown = Dropdown([], self.font, commit_callback=self.apply_db_filters)
+        self.db_neighborhood_dropdown = Dropdown([], self.font, commit_callback=self.apply_db_filters)
+        self.db_rule_input = TextInput("", self.font, width=180, placeholder="B3/S23", commit_callback=self.apply_db_filters)
+        self.available_columns = set()
         self.scroll_y, self.scroll_speed = 0, 20
         self.is_dragging, self.drag_start_y = False, 0
         self.scrollbar_rect, self.handle_rect, self.handle_height = None, None, 0
@@ -196,15 +237,26 @@ class SettingsPanel:
             for control in self.numeric_controls.values(): control['input'].handle_event(event)
             for slider in self.slider_objects.values(): slider.handle_event(event)
         elif self.active_view == "db_explorer":
-            self.db_rule_filter_dropdown.handle_event(event)
+            self.db_shape_dropdown.handle_event(event)
+            self.db_neighborhood_dropdown.handle_event(event)
+            self.db_rule_input.handle_event(event)
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             pos = event.pos
             for key, rect in self.buttons.items():
+                if self.active_view == "db_explorer" and key in ['Apply', 'Randomise Lifeforms', 'Auto Run', 'DB Explorer']:
+                    continue
+                if self.active_view == "settings" and key.startswith('Load-'):
+                    continue
                 if rect and rect.collidepoint(pos):
                     if key == 'DB Explorer': self.active_view = 'db_explorer'; self.refresh_db_view(); return
                     elif key == 'Back to Settings': self.active_view = 'settings'; return
                     elif key == 'Clear Filter': self.clear_db_filter(); return
+                    elif key == 'Apply Filters': self.apply_db_filters(); return
                     elif key == 'Load into Lifeform 1': self.load_selected_rules(); return
+                    elif key.startswith('Load-'):
+                        try: self.db_selected_row_id = int(key.split('-', 1)[1])
+                        except ValueError: pass
+                        self.load_selected_rules(); return
                     elif key == 'Apply': self.apply_settings()
                     elif key == 'Randomise Lifeforms': self.randomise_lifeforms()
                     elif key == 'Auto Run': self.auto_run()
@@ -216,11 +268,17 @@ class SettingsPanel:
                         self.apply_settings(); self.game.create_grid(); return
             elif self.active_view == "db_explorer":
                 for row_rect, row_id in self.db_row_rects:
-                    if row_rect.collidepoint(pos): self.db_selected_row_id = row_id; break
+                    if row_rect.collidepoint(pos): self.db_selected_row_id = row_id; self.load_selected_rules(); return
         elif event.type == pygame.MOUSEWHEEL:
-            self.scroll_y -= event.y * self.scroll_speed
-            max_scroll = self.get_max_scroll()
-            self.scroll_y = max(0, min(self.scroll_y, max_scroll))
+            if self.active_view == "db_explorer":
+                # Avoid fighting dropdown scroll when open
+                if not (self.db_shape_dropdown.active or self.db_neighborhood_dropdown.active):
+                    self.db_scroll_y -= event.y * self.db_scroll_speed
+                    self.db_scroll_y = max(0, min(self.db_scroll_y, max(self.db_content_height - self.db_visible_height, 0)))
+            else:
+                self.scroll_y -= event.y * self.scroll_speed
+                max_scroll = self.get_max_scroll()
+                self.scroll_y = max(0, min(self.scroll_y, max_scroll))
 
     def apply_settings(self): self.game.create_grid()
     def update_lifeform_rules(self):
@@ -232,44 +290,199 @@ class SettingsPanel:
     def randomise_lifeforms(self): self.game.randomise_lifeforms(); self.update_lifeform_rules(); self.game.create_grid()
     def auto_run(self): 
         if hasattr(self, 'game') and self.game.auto_run_sessions >= 1: self.game.start_auto_run(self.game.auto_run_sessions)
-    def apply_db_rule_filter(self, selected_rule):
-        if selected_rule: b, s = selected_rule.split('/'); self.db_filters = {"rules": {"birth": b[1:], "survival": s[1:]}}
-        else: self.db_filters = {}
-        self.db_page = 0; self.refresh_db_view()
-    def clear_db_filter(self): self.db_rule_filter_dropdown.selected_option = None; self.db_filters = {}; self.db_page = 0; self.refresh_db_view()
+    def apply_db_filters(self):
+        shape = self.db_shape_dropdown.selected_option
+        neighborhood = self.db_neighborhood_dropdown.selected_option
+        self.db_filters_state["shape"] = None if shape in (None, "Any") else shape
+        self.db_filters_state["neighborhood"] = None if neighborhood in (None, "Any") else neighborhood
+        self.db_filters_state["signature"] = (self.db_rule_input.text or "").strip()
+        self.db_page = 0; self.db_scroll_y = 0; self.refresh_db_view()
+    def clear_db_filter(self):
+        self.db_shape_dropdown.selected_option = "Any" if self.db_filter_options["shape"] else None
+        self.db_neighborhood_dropdown.selected_option = "Any" if self.db_filter_options["neighborhood"] else None
+        self.db_rule_input.text = ""
+        self.db_filters_state = {"shape": None, "neighborhood": None, "signature": ""}
+        self.db_page = 0; self.db_scroll_y = 0; self.refresh_db_view()
     def load_selected_rules(self):
         if self.db_selected_row_id is None: return
         row = get_row_by_id(self.db_path, self.db_table, self.db_selected_row_id)
         if not row: return
         self.game.shape = row['shape']; self.game.apply_ruleset_to_lifeform(0, row['lifeform_birth_rules'], row['lifeform_survival_rules']); self.active_view = "settings"
     def refresh_db_view(self):
-        if not self.db_schema: self.db_schema = get_schema(self.db_path)
-        if not self.db_rule_filter_dropdown.options: self.db_rule_filter_dropdown.options = [""] + get_unique_rules(self.db_path, self.db_table)
+        if not self.db_schema:
+            self.db_schema = get_schema(self.db_path)
+        self.available_columns = set(self.db_schema.get(self.db_table, []))
+        self._load_filter_options()
+        filter_payload = self._build_db_filter_payload()
         offset = self.db_page * self.db_page_size
-        self.db_rows, self.db_total, self.db_columns = query_rows(self.db_path, self.db_table, self.db_filters, self.db_sort_by, self.db_sort_dir, self.db_page_size, offset)
+        self.db_rows, self.db_total, self.db_columns = query_rows(self.db_path, self.db_table, filter_payload, self.db_sort_by, self.db_sort_dir, self.db_page_size, offset)
+        self.db_content_height = len(self.db_rows) * 70
+        self.db_scroll_y = min(self.db_scroll_y, max(self.db_content_height - self.db_visible_height, 0))
+
+    def _load_filter_options(self):
+        if "shape" in self.available_columns:
+            shapes = get_unique_values(self.db_path, self.db_table, "shape")
+        else:
+            shapes = []
+        self.db_filter_options["shape"] = shapes
+        self.db_shape_dropdown.options = ["Any"] + shapes if shapes else ["Any"]
+
+        if "neighborhood" in self.available_columns:
+            neighborhoods = get_unique_values(self.db_path, self.db_table, "neighborhood")
+        else:
+            neighborhoods = []
+        self.db_filter_options["neighborhood"] = neighborhoods
+        if neighborhoods:
+            self.db_neighborhood_dropdown.options = ["Any"] + neighborhoods
+            if self.db_neighborhood_dropdown.selected_option not in self.db_neighborhood_dropdown.options:
+                self.db_neighborhood_dropdown.selected_option = "Any"
+        else:
+            self.db_neighborhood_dropdown.options = []
+            self.db_filters_state["neighborhood"] = None
+
+        if self.db_shape_dropdown.selected_option is None:
+            self.db_shape_dropdown.selected_option = "Any"
+
+    def _build_db_filter_payload(self):
+        filters = {}
+        shape = self.db_filters_state.get("shape")
+        neighborhood = self.db_filters_state.get("neighborhood")
+        signature = (self.db_filters_state.get("signature") or "").strip()
+        if shape:
+            filters["shape"] = {"eq": shape}
+        if neighborhood and "neighborhood" in self.available_columns:
+            filters["neighborhood"] = {"eq": neighborhood}
+        parsed = self._parse_rule_signature(signature)
+        if parsed:
+            filters["rules"] = parsed
+        elif signature:
+            filters["search"] = {"contains": signature}
+        return filters
+
+    def _parse_rule_signature(self, text):
+        if not text:
+            return None
+        normalized = text.strip().upper().replace(" ", "")
+        if "/" in normalized:
+            try:
+                birth_part, surv_part = normalized.split("/", 1)
+                birth = birth_part.replace("B", "")
+                surv = surv_part.replace("S", "")
+                if birth.isdigit() and surv.isdigit():
+                    return {"birth": birth, "survival": surv}
+            except ValueError:
+                return None
+        return None
     def draw(self, surface, x, y, width):
         if self.active_view == "db_explorer": self._draw_db_explorer(surface, x, y, width)
         else: self._draw_settings(surface, x, y, width)
     def _draw_db_explorer(self, surface, x, y, width):
-        current_y = y + 10; self.db_row_rects = []
-        back_rect = pygame.Rect(x + 10, current_y, width - 40, 30); self.buttons['Back to Settings'] = back_rect
-        pygame.draw.rect(surface, BUTTON_COLOR, back_rect, border_radius=5)
-        surface.blit(self.font.render("Back to Settings", True, TEXT_COLOR), self.font.render("Back to Settings", True, TEXT_COLOR).get_rect(center=back_rect.center)); current_y += 40
-        dropdown_rect = pygame.Rect(x + 10, current_y, width - 100, 30); self.db_rule_filter_dropdown.draw(surface, dropdown_rect)
-        clear_rect = pygame.Rect(dropdown_rect.right + 5, current_y, 80, 30); self.buttons['Clear Filter'] = clear_rect
-        pygame.draw.rect(surface, BUTTON_COLOR, clear_rect, border_radius=3)
-        surface.blit(self.font.render("Clear", True, TEXT_COLOR), self.font.render("Clear", True, TEXT_COLOR).get_rect(center=clear_rect.center)); current_y += 40
-        header_text = f"{'ID':<5} {'Shape':<8} {'Rules'}"; surface.blit(pygame.font.SysFont(FONT_NAME, FONT_SIZE, bold=True).render(header_text, True, TEXT_COLOR), (x + 10, current_y)); current_y += 20
-        if self.db_loading: surface.blit(self.font.render("Loading...", True, TEXT_COLOR), (x + 10, current_y))
+        padding = 10
+        current_y = y + padding
+        self.db_row_rects = []
+        for key in list(self.buttons.keys()):
+            if key.startswith('Load-'):
+                del self.buttons[key]
+
+        # Nav
+        back_rect = pygame.Rect(x + padding, current_y, width - 2 * padding, 32); self.buttons['Back to Settings'] = back_rect
+        pygame.draw.rect(surface, BUTTON_COLOR, back_rect, border_radius=6)
+        pygame.draw.rect(surface, TEXT_COLOR, back_rect, 1, border_radius=6)
+        surface.blit(self.font.render("Back to Settings", True, TEXT_COLOR), self.font.render("Back to Settings", True, TEXT_COLOR).get_rect(center=back_rect.center))
+        current_y += 42
+
+        # Filter panel
+        panel_height = 130
+        panel_rect = pygame.Rect(x + padding, current_y, width - 2 * padding, panel_height)
+        pygame.draw.rect(surface, PANEL_BACKGROUND_COLOR, panel_rect, border_radius=8)
+        pygame.draw.rect(surface, BUTTON_COLOR, panel_rect, 1, border_radius=8)
+        title_surf = self.font.render("Search & Filter", True, TEXT_COLOR)
+        surface.blit(title_surf, (panel_rect.x + 12, panel_rect.y + 8))
+
+        row_y = panel_rect.y + 32
+        col_width = (panel_rect.width - 3 * padding) // 2
+
+        shape_label = self.font.render("Grid Shape", True, TEXT_COLOR); surface.blit(shape_label, (panel_rect.x + 12, row_y))
+        shape_rect = pygame.Rect(panel_rect.x + 12, row_y + 16, col_width, 30)
+        self.db_shape_dropdown.draw(surface, shape_rect)
+
+        neigh_label = self.font.render("Neighborhood", True, TEXT_COLOR)
+        surface.blit(neigh_label, (panel_rect.x + col_width + padding + 12, row_y))
+        neigh_rect = pygame.Rect(panel_rect.x + col_width + padding + 12, row_y + 16, col_width, 30)
+        if self.db_neighborhood_dropdown.options:
+            self.db_neighborhood_dropdown.draw(surface, neigh_rect)
         else:
-            for row in self.db_rows:
-                is_selected = row['id'] == self.db_selected_row_id; row_color = BUTTON_HOVER_COLOR if is_selected else TEXT_COLOR
-                row_text = f"{row['id']:<5} {row['shape']:<8} B{row['lifeform_birth_rules']}/S{row['lifeform_survival_rules']}"
-                row_rect = pygame.Rect(x + 10, current_y, width - 40, 20); self.db_row_rects.append((row_rect, row['id']))
-                surface.blit(self.font.render(row_text, True, row_color), row_rect); current_y += 20
+            pygame.draw.rect(surface, BUTTON_COLOR, neigh_rect, border_radius=4)
+            pygame.draw.rect(surface, TEXT_COLOR, neigh_rect, 2, border_radius=4)
+            surface.blit(self.font.render("Not in DB", True, TEXT_COLOR), (neigh_rect.x + 8, neigh_rect.y + 6))
+
+        # Rule signature input
+        rule_label = self.font.render("Rule signature (B3/S23)", True, TEXT_COLOR)
+        surface.blit(rule_label, (panel_rect.x + 12, row_y + 56))
+        rule_rect = pygame.Rect(panel_rect.x + 12, row_y + 72, col_width, 30)
+        self.db_rule_input.draw(surface, rule_rect)
+
+        # Filter buttons
+        apply_rect = pygame.Rect(panel_rect.x + col_width + padding + 12, row_y + 72, col_width // 2 - 6, 30); self.buttons['Apply Filters'] = apply_rect
+        clear_rect = pygame.Rect(apply_rect.right + 8, row_y + 72, col_width // 2 - 6, 30); self.buttons['Clear Filter'] = clear_rect
+        pygame.draw.rect(surface, BUTTON_HOVER_COLOR, apply_rect, border_radius=5); pygame.draw.rect(surface, TEXT_COLOR, apply_rect, 1, border_radius=5)
+        surface.blit(self.font.render("Apply", True, TEXT_COLOR), self.font.render("Apply", True, TEXT_COLOR).get_rect(center=apply_rect.center))
+        pygame.draw.rect(surface, BUTTON_COLOR, clear_rect, border_radius=5); pygame.draw.rect(surface, TEXT_COLOR, clear_rect, 1, border_radius=5)
+        surface.blit(self.font.render("Clear", True, TEXT_COLOR), self.font.render("Clear", True, TEXT_COLOR).get_rect(center=clear_rect.center))
+
+        current_y = panel_rect.bottom + padding
+
+        # Results list
+        list_top = current_y
+        list_height = max(surface.get_height() - list_top - 50, 60)
+        self.db_visible_height = max(list_height, 0)
+        list_rect = pygame.Rect(x + padding, list_top, width - 2 * padding - 12, list_height)
+        surface.blit(self.font.render(f"Results ({self.db_total})", True, TEXT_COLOR), (list_rect.x, list_rect.y - 20))
+
+        card_height = 72
+        self.db_content_height = len(self.db_rows) * card_height
+        self.db_scrollbar_rect = pygame.Rect(list_rect.right + 4, list_rect.y, 8, list_rect.height)
+        surface.set_clip(list_rect)
+
+        y_pos = list_rect.y - self.db_scroll_y
+        self.db_row_rects = []
+        for row in self.db_rows:
+            card_rect = pygame.Rect(list_rect.x, y_pos, list_rect.width, card_height - 8)
+            if card_rect.bottom < list_rect.y or card_rect.top > list_rect.bottom:
+                y_pos += card_height
+                continue
+            self.db_row_rects.append((card_rect, row['id']))
+            is_selected = row['id'] == self.db_selected_row_id
+            bg_color = BUTTON_HOVER_COLOR if card_rect.collidepoint(pygame.mouse.get_pos()) else BUTTON_COLOR
+            if is_selected: bg_color = SCROLLBAR_HANDLE_COLOR
+            pygame.draw.rect(surface, bg_color, card_rect, border_radius=6)
+            pygame.draw.rect(surface, TEXT_COLOR, card_rect, 1, border_radius=6)
+
+            rule_text = f"Rule #{row['id']} • B{row['lifeform_birth_rules']}/S{row['lifeform_survival_rules']}"
+            shape_text = f"Shape: {row.get('shape', 'n/a')}"
+            meta_text = f"Alive: {row.get('alive_count', '-')}, Static: {row.get('static_count', '-')}"
+            surface.blit(self.font.render(rule_text, True, TEXT_COLOR), (card_rect.x + 10, card_rect.y + 8))
+            surface.blit(self.font.render(shape_text, True, TEXT_COLOR), (card_rect.x + 10, card_rect.y + 28))
+            surface.blit(self.font.render(meta_text, True, TEXT_COLOR), (card_rect.x + 10, card_rect.y + 46))
+
+            load_rect = pygame.Rect(card_rect.right - 90, card_rect.y + 18, 80, 30)
+            self.buttons[f'Load-{row["id"]}'] = load_rect
+            pygame.draw.rect(surface, PANEL_BACKGROUND_COLOR, load_rect, border_radius=5)
+            pygame.draw.rect(surface, TEXT_COLOR, load_rect, 1, border_radius=5)
+            surface.blit(self.font.render("Load", True, TEXT_COLOR), self.font.render("Load", True, TEXT_COLOR).get_rect(center=load_rect.center))
+
+            y_pos += card_height
+
+        surface.set_clip(None)
+        self.update_db_scrollbar()
+        if self.db_scrollbar_rect and self.db_handle_rect:
+            pygame.draw.rect(surface, SCROLLBAR_COLOR, self.db_scrollbar_rect, border_radius=4)
+            pygame.draw.rect(surface, SCROLLBAR_HANDLE_COLOR, self.db_handle_rect, border_radius=4)
+
         if self.db_selected_row_id is not None:
-            load_rect = pygame.Rect(x + 10, surface.get_height() - 40, width - 40, 30); self.buttons['Load into Lifeform 1'] = load_rect
+            load_rect = pygame.Rect(x + padding, surface.get_height() - 36, width - 2 * padding, 28); self.buttons['Load into Lifeform 1'] = load_rect
             pygame.draw.rect(surface, BUTTON_COLOR, load_rect, border_radius=5)
+            pygame.draw.rect(surface, TEXT_COLOR, load_rect, 1, border_radius=5)
             surface.blit(self.font.render("Load into Lifeform 1", True, TEXT_COLOR), self.font.render("Load into Lifeform 1", True, TEXT_COLOR).get_rect(center=load_rect.center))
 
     def _draw_settings(self, surface, x, y, width):
@@ -324,3 +537,19 @@ class SettingsPanel:
         prop = self.scroll_y / max_scroll if max_scroll > 0 else 0
         handle_y = self.scrollbar_rect.y + int(prop * (track_h - self.handle_height))
         self.handle_rect = pygame.Rect(self.scrollbar_rect.x, handle_y, self.scrollbar_rect.width, self.handle_height)
+
+    def update_db_scrollbar(self):
+        if not self.db_scrollbar_rect:
+            self.db_handle_rect = None
+            return
+        if self.db_content_height <= self.db_visible_height:
+            self.db_handle_rect = None
+            self.db_scroll_y = 0
+            return
+        track_h = self.db_scrollbar_rect.height
+        self.db_handle_height = max(int(track_h * self.db_visible_height / self.db_content_height), 20)
+        max_scroll = max(self.db_content_height - self.db_visible_height, 0)
+        self.db_scroll_y = max(0, min(self.db_scroll_y, max_scroll))
+        prop = self.db_scroll_y / max_scroll if max_scroll > 0 else 0
+        handle_y = self.db_scrollbar_rect.y + int(prop * (track_h - self.db_handle_height))
+        self.db_handle_rect = pygame.Rect(self.db_scrollbar_rect.x, handle_y, self.db_scrollbar_rect.width, self.db_handle_height)
