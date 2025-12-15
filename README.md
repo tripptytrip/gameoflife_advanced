@@ -1,152 +1,119 @@
-## Game of Life Advanced
+# Game of Life Advanced
 
-A customisable and extensible implementation of Conway's Game of Life, featuring multiple lifeforms, different grid shapes, and comprehensive data recording.
+A sophisticated and extensible implementation of Conway's Game of Life, built with Python and Pygame. This project goes far beyond a traditional Game of Life simulator, offering a powerful platform for experimentation and discovery in the world of cellular automata.
+
+It features multiple competing lifeforms, selectable grid geometries, and a background genetic algorithm that automatically discovers novel, complex rule sets.
 
 ### Table of Contents
 
 - [Features](#features)
+- [Core Components](#core-components)
 - [Installation](#installation)
 - [Usage](#usage)
-  - [Controls](#controls)
-  - [Settings Panel](#settings-panel)
-  - [Auto-Run Mode](#auto-run-mode)
-- [Data Recording](#data-recording)
-- [Customization](#customization)
-  - [Lifeforms](#lifeforms)
-  - [Grid Shapes](#grid-shapes)
+- [Automated Rule Discovery](#automated-rule-discovery)
+- [Data Recording & Analysis](#data-recording--analysis)
 - [Dependencies](#dependencies)
-- [Contributing](#contributing)
-- [License](#license)
 
 ---
 
 ### Features
 
-- **Multiple Lifeforms**: Simulate up to 10 different lifeforms, each with unique birth and survival rules.
-- **Different Grid Shapes**: Choose between triangle, square, or hexagon grids.
-- **Dynamic Settings Panel**: Adjust simulation parameters on-the-fly with an interactive settings panel.
-- **Data Recording**: Collect detailed statistics of each simulation session in a SQLite database.
-- **Visualization**: Real-time rendering using Pygame with enhanced UI elements.
-- **Auto-Run Mode**: Automate simulations for data collection and analysis.
+- **Multiple Grid Geometries**: Run simulations on `square`, `hexagon`, or `triangle` grids.
+- **Multi-Lifeform Simulation**: Simulate up to 10 distinct "species" at once, each with its own unique color and birth/survival rules.
+- **Performant Backend**: The simulation grid is powered by NumPy and SciPy, allowing for large grid sizes and fast, efficient updates.
+- **Automated Rule Discovery**: A genetic algorithm runs in a background thread, continuously searching for "interesting" and complex rules based on criticality analysis.
+- **Advanced Data Recording**: Every simulation run is logged to a `species.db` SQLite database, capturing a rich set of metrics per-generation for each lifeform (e.g., population, cluster size, entropy, mobility).
+- **Dynamic Settings Panel**: An interactive UI to control every aspect of the simulation on-the-fly, from grid size and shape to the rules of each lifeform.
+- **Execution Modes**: Supports both interactive, visual simulation and a headless "Auto-Run" mode for rapid, large-scale data collection.
+- **Kill Attribution**: A unique analysis feature that attempts to determine which lifeform "killed" another in cases of death by overcrowding.
+
+---
+
+### Core Components
+
+- **`main.py`**: The primary entry point. It launches the visual simulation and the background rule discovery thread.
+- **`game.py`**: Orchestrates the main application, including the Pygame window, the main loop, event handling, and rendering the UI and chart.
+- **`rule_discovery.py`**: A background task that uses a genetic algorithm to find novel rules. Results are saved to `discovered_rules_*.json`.
+- **`data_recorder.py`**: Manages all writing to the `species.db` database in a thread-safe, buffered manner.
+- **`*_grid.py`**: The core simulation logic for each grid geometry, built on NumPy for performance.
+- **`species.db`**: The SQLite database where all experimental data is stored.
 
 ---
 
 ### Installation
 
-1. **Clone the Repository**
+1.  **Clone the Repository**
 
-   ```bash
-   git clone https://github.com/tripptytrip/gameoflife_advanced.git
-   cd gameoflife_advanced
+    ```bash
+    git clone https://github.com/tripptytrip/gameoflife_advanced.git
+    cd gameoflife_advanced
+    ```
 
-2. **Create a Virtual Environment (Optional but Recommended)**
+2.  **Create a Virtual Environment (Recommended)**
 
     ```bash
     python -m venv venv
     source venv/bin/activate  # On Windows, use venv\Scripts\activate
-    
-3. **Install Dependencies**
+    ```
+
+3.  **Install Dependencies**
 
     ```bash
     pip install -r requirements.txt
+    ```
 
-    #Note: the main dependencies are:
-    #    pygame
-    #    sqlite3 (built-in with Python)
+---
 
 ### Usage
 
-1. **Run the main script to start the simulation:**
+1.  **Run the Main Script**
+
+    To start the application, run `main.py`. This will open the Pygame window for the interactive simulation and start the rule discovery process in the background.
 
     ```bash
-    python game.py
+    python main.py
+    ```
 
+2.  **Controls**
 
-2. **Controls**
+    -   **Spacebar**: Start/Pause the simulation.
+    -   **R**: Reset the grid to its initial random state.
+    -   **N**: Generate a new random grid with a new set of random lifeforms.
+    -   **S**: Step forward one generation (only when paused).
+    -   **Click on a Cell**: Toggle the state (alive/dead) of a cell.
 
-    Spacebar: Start/Pause the simulation.
-    R: Reset the grid to the initial state.
-    N: Generate a new random grid with new lifeforms.
-    S: Step forward one generation (when paused).
-    Click on Cells: Toggle the state (alive/dead) of individual cells.
+3.  **Settings Panel**
 
-### Settings Panel
+    The panel on the left of the screen provides full control over the simulation. You can adjust grid dimensions, select the grid shape, set the number of lifeforms, and define the specific `B/S` (Birth/Survival) rules for each one.
 
-1. **On the left side of the window, there is a settings panel where you can:**
+---
 
-    Adjust the Initial Alive Percentage of cells.
-    Change the Simulation Speed (FPS).
-    Set the Number of Lifeforms (1-10).
-    Modify the Grid Width and Grid Height.
-    Select the Grid Shape: triangle, square, or hexagon.
-    Define custom Birth and Survival Rules for each lifeform.
-    Apply changes to restart the simulation with new settings.
-    Randomise Lifeforms to generate new rule sets.
-    Initiate Auto Run mode for automated simulations.
+### Automated Rule Discovery
 
-2. **Auto-Run Mode - To collect data across multiple simulations:**
+This project's most advanced feature is its ability to "discover" new rules on its own. The `rule_discovery.py` script uses a genetic algorithm to find rules that produce complex, "critical" behavior—somewhere between dying out and exploding.
 
-    Set the Number of Generations for each simulation in the settings panel.
-    Click the Auto Run button.
-    The simulation will run automatically for the specified number of generations, collecting data in the database.
+-   The process runs automatically in the background when you start `main.py`.
+-   It evaluates rules based on a fitness score derived from running headless simulations and analyzing the output (e.g., activity, damage spreading, and compression ratio).
+-   When a high-scoring rule is found, it is saved to a JSON file named `discovered_rules_[shape].json` (e.g., `discovered_rules_square.json`).
 
-    Note: During auto-run mode, the simulation UI may not update every frame to enhance performance.
-   
-### Data Recording
+---
 
-1. **All simulation data is recorded in a SQLite database named species.db.**
-   
-   The data_recorder.py script handles the insertion of records, including:
+### Data Recording & Analysis
 
-    Session ID: Unique identifier for each simulation session.
-    Generation: The current generation number.
-    Lifeform Data: Birth and survival rules, alive counts, and other metrics for each lifeform.
-    Metrics: Statistics such as growth rate, death rate, average lifespan, cluster sizes, entropy, mobility, and diversity.
+The application is designed for rigorous data collection.
 
-2. **The database consists of two tables:**
+-   **Database**: All simulation data is recorded in a SQLite database named `species.db`.
+-   **Tables**:
+    -   `life_records`: Stores per-generation data for every lifeform, including its rules, alive/static counts, and advanced metrics like `average_cluster_size`, `growth_rate`, `entropy`, `mobility`, and more.
+    -   `lifeform_meta`: Stores metadata for each unique lifeform profile to reduce data redundancy.
+-   **Auto-Run Mode**: For high-throughput experiments, you can use the "Auto Run" feature in the settings panel. This will run multiple simulations back-to-back with randomized parameters, populating the database without requiring user interaction.
 
-    life_records: Stores per-generation data for lifeforms.
-    lifeform_meta: Stores metadata for each lifeform used in the simulations.
+---
 
-### Customisation
+### Dependencies
 
-1. **Lifeforms**
-
-   You can customize lifeforms by setting their birth and survival rules:
-
-   In the settings panel, scroll down to the Lifeform Rules section.
-
-   For each lifeform (up to 10), input comma-separated numbers representing neighbor counts for:
-   
-     Birth Rules: Conditions under which a dead cell becomes alive.
-     Survival Rules: Conditions under which a live cell continues to live.
-
-    Click Apply to restart the simulation with the new rules.
-
-2. **Grid Shapes**
-
-    The simulation supports three grid shapes:
-
-      Triangle Grid: Cells are arranged in a triangular lattice.
-      Square Grid: Traditional Game of Life grid.
-      Hexagon Grid: Cells are hexagonally packed.
-
-    Select the desired grid shape from the settings panel under Grid Shape.
-    
-### Dependencies:
-
-      Python 3.7 or higher
-      Pygame library
-      SQLite3 (included with Python)
-
-### Acknowledgments
-
-  Conway's Game of Life: A cellular automaton devised by mathematician John Horton Conway.
-  Pygame: A set of Python modules designed for writing video games.
-
-Additional Notes
-
-  Ensure your system meets the necessary graphical requirements to run Pygame applications.
-  The simulation's performance may vary based on grid size and the number of lifeforms.
-  For large simulations or data collection, consider running the program without rendering the UI to improve performance.
-
+-   Python 3.7+
+-   Pygame
+-   NumPy
+-   SciPy
+-   SQLite3 (built-in with Python)
