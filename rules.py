@@ -5,27 +5,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Set
+from typing import Set
 
 
 @dataclass(frozen=True)
 class Rule:
     birth: Set[int]
     survive: Set[int]
-
-    @staticmethod
-    def from_bs_string(rule_str: str) -> "Rule":
-        """
-        Parse a standard B*/S* rule string.
-        """
-        rule_str = rule_str.upper()
-        parts = rule_str.split("/")
-        birth_part = next((p[1:] for p in parts if p.startswith("B")), "")
-        survive_part = next((p[1:] for p in parts if p.startswith("S")), "")
-
-        birth = {int(ch) for ch in birth_part if ch.isdigit()}
-        survive = {int(ch) for ch in survive_part if ch.isdigit()}
-        return Rule(birth=birth, survive=survive)
 
     def to_bs_string(self, N: int) -> str:
         """

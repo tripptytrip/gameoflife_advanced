@@ -220,24 +220,4 @@ class SquareGrid:
                     self.grid[grid_y, grid_x] = 1
                     self.grid_lifespans[grid_y, grid_x] = 1
 
-    # Metrics calculation methods need to be refactored to work with NumPy arrays
-    def calculate_average_cluster_size(self, lifeform_id):
-        # Placeholder
-        return 0
-
-    def calculate_max_cluster_size(self, lifeform_id):
-        # Placeholder
-        return 0
-
-    def identify_clusters(self, lifeform_id):
-        # Placeholder
-        return []
-
-    def calculate_entropy(self, lifeform_id):
-        # Placeholder
-        return 0
-
-    def calculate_pattern_diversity(self, lifeform_id):
-        # Placeholder
-        return 0
 

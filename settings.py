@@ -3,24 +3,16 @@
 # Window settings
 WINDOW_WIDTH = 1200
 WINDOW_HEIGHT = 800
-FPS = 30  # Default FPS
 
 # Grid settings
-DEFAULT_SHAPE = 'triangle'  # Options: 'triangle', 'square', 'hexagon'
 DEFAULT_TRIANGLE_MODE = 'edge+vertex'  # Options: 'edge', 'edge+vertex'
 
 # Cell settings
-CELL_SIZE_TRIANGLE = 8  # Size for triangular cells
-CELL_SIZE_SQUARE = 4     # Size for square cells
-CELL_SIZE_HEXAGON = 3     # Size for hexagonal cells
 
 # Game rules (default rules)
-DEFAULT_BIRTH_RULES = [5, 6]        # Adjusted as needed for triangle grid
-DEFAULT_SURVIVAL_RULES = [4, 5, 6]  # Adjusted as needed for triangle grid
 
 # Colors (RGB tuples)
 BACKGROUND_COLOR = (25, 25, 30)
-LIVE_CELL_COLOR = (0, 200, 150)
 DEAD_CELL_COLOR = (45, 45, 50)
 GRID_LINE_COLOR = (60, 60, 65)
 TEXT_COLOR = (240, 240, 240)
@@ -35,7 +27,6 @@ FONT_NAME = 'Arial'
 FONT_SIZE = 12
 
 # Default initial alive percentage
-DEFAULT_INITIAL_ALIVE_PERCENTAGE = 50  # Percentage (0 to 100)
 
 # Lifeform Colors (RGB tuples)
 LIFEFORM_COLORS_ALIVE = [

@@ -3,7 +3,7 @@
 import sqlite3
 import random
 
-import itertools
+
 from neighbor_utils import get_max_neighbors
 
 def generate_species():

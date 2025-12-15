@@ -227,15 +227,6 @@ class HexagonGridNumpy(SquareGrid):
                             self.grid_lifespans[r, c] = 1
                     return
 
-    def get_hexagon_position(self, col, row):
-        """
-        Converts array coordinates (col, row) to pixel coordinates for hexagons.
-        Uses odd-q offset coordinates for flat-topped hexagons.
-        """
-        x = self.cell_size * 1.5 * col
-        y = self.cell_size * math.sqrt(3) * (row + 0.5 * (col & 1))
-        return x, y
-
     def resize(self, available_width=None, available_height=None):
         """
         Recompute cell size on window resize without resetting state.

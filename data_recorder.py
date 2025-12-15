@@ -5,48 +5,7 @@ import threading
 import numpy as np
 import zlib
 
-def evaluate_rule_criticality(grid_history):
-    """
-    Evaluates if a rule shows complex, maze-like behavior.
-    Args:
-        grid_history: A list of the last 50 grid states (numpy arrays).
-    Returns:
-        float: A score (0.0 to 1.0). Higher is more 'critical/maze-like'.
-    """
-    
-    # 1. Check for extinction or saturation
-    final_grid = grid_history[-1]
-    population = np.count_nonzero(final_grid)
-    total_cells = final_grid.size
-    density = population / total_cells
-    
-    # Reject if empty or totally full
-    if density < 0.05 or density > 0.95:
-        return 0.0
 
-    # 2. Check for Activity (is it frozen?)
-    # Compare last frame to 10 frames ago. If identical, it's static.
-    if len(grid_history) >= 10 and np.array_equal(final_grid, grid_history[-10]):
-        return 0.0 
-
-    # 3. The Compression Test (The "Maze" Detector)
-    # Convert grid to bytes
-    grid_bytes = final_grid.tobytes()
-    compressed = zlib.compress(grid_bytes)
-    
-    # Calculate compression ratio
-    ratio = len(compressed) / len(grid_bytes)
-    
-    # We want a "Goldilocks" ratio. 
-    # Based on the video, labyrinths usually compress to about 30-50% of original size.
-    # We score based on distance from an ideal target of 0.4
-    target_ratio = 0.4
-    dist = abs(ratio - target_ratio)
-    
-    # Invert distance to get score (closer is better)
-    score = max(0, 1.0 - (dist * 2)) 
-    
-    return score
 
 class DataRecorder:
     """

@@ -29,9 +29,6 @@ class NumericInput:
         self.active = False
         self.rect = None
 
-    def set_rect(self, rect):
-        self.rect = rect
-
     def clamp(self, val):
         return max(self.min, min(self.max, val))
 
@@ -167,7 +164,6 @@ class SettingsPanel:
     def __init__(self, game):
         self.game = game
         self.font = pygame.font.SysFont(FONT_NAME, FONT_SIZE)
-        self.active_box = None
         self.numeric_controls = {}
         self.setup_panel()
 
@@ -601,7 +597,6 @@ class SettingsPanel:
         self.content_height = padding_top  # Initialize content_height with padding
 
         line_height = 25
-        spacing = 10
 
         # Draw Sliders
         for label, slider_info in self.sliders.items():

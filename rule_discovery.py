@@ -22,7 +22,6 @@ MUTATION_RATE = 1  # Number of bits to flip
 SHAPE = "square"  # Options: square, hexagon, triangle
 TRIANGLE_MODE = "edge+vertex"
 NEIGHBOR_COUNT = get_max_neighbors(SHAPE, TRIANGLE_MODE)
-GENE_LENGTH = 2 * (NEIGHBOR_COUNT + 1)
 
 # A lock to prevent race conditions when writing to the JSON file
 file_lock = threading.Lock()
