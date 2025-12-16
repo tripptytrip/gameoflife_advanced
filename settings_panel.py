@@ -426,7 +426,7 @@ class SettingsPanel:
 
     def apply_numeric_value(self, label, value):
         cfg = self.numeric_configs.get(label, {'min': value, 'max': value}); value = max(cfg['min'], min(cfg['max'], value))
-        if label in self.slider_objects: self.slider_objects[label].value = value; self.slider_objects[label].handle_x = self.slider_objects[label].get_handle_position()
+        if label in self.slider_objects: self.slider_objects[label].value = value
         if label in self.numeric_controls: self.numeric_controls[label]['input'].set_value(value)
         slider_info = self.slider_configs.get(label, {})
         if slider_info.get('live_callback'): slider_info['live_callback'](value)
@@ -718,7 +718,7 @@ class SettingsPanel:
             self.db_row_rects.append((card_rect, row['id']))
             is_selected = row['id'] == self.db_selected_row_id
             bg_color = BUTTON_HOVER_COLOR if card_rect.collidepoint(pygame.mouse.get_pos()) else BUTTON_COLOR
-            if is_selected: bg_color = SCROLLBAR_HANDLE_COLOR
+            if is_selected: bg_color = SCROLLBAR_HANDLE
             pygame.draw.rect(surface, bg_color, card_rect, border_radius=6)
             pygame.draw.rect(surface, TEXT_COLOR, card_rect, 1, border_radius=6)
 

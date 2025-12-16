@@ -433,6 +433,8 @@ class GameOfLife:
         self.is_running = False
         self.is_paused = True
         self.generation = 0
+        # Animated counter for generation display/metrics
+        self.animated_generation = AnimatedValue(initial=self.generation)
         # Limit how much history we plot/keep to avoid slow charts
         self.history_limit = 300
         
