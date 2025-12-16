@@ -17,6 +17,15 @@ class TooltipManager:
             self.current_tooltip = text
             self.hover_start = pygame.time.get_ticks()
             self.position = pos
+
+    def update(self, text, pos=None):
+        """Convenience wrapper to set/clear tooltip text with an optional position."""
+        if not text:
+            self.clear()
+            return
+        # Fallback to last position or a sane default if none provided.
+        pos = pos or self.position or (12, 12)
+        self.set(text, pos)
             
     def clear(self):
         self.current_tooltip = None
