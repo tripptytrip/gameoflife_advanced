@@ -9,11 +9,11 @@ from settings import (
     BUTTON_BORDER_RADIUS,
     BUTTON_HEIGHT_SMALL,
     BUTTON_HEIGHT_LARGE,
-    SCROLLBAR_COLOR,
-    SCROLLBAR_HANDLE_COLOR,
     DEFAULT_TRIANGLE_MODE,
     ACCENT_PRIMARY,
     SCROLLBAR_TRACK,
+    SCROLLBAR_HANDLE,
+    SCROLLBAR_HANDLE_HOVER,
 )
 from lifeform import Lifeform
 from neighbor_utils import get_max_neighbors
@@ -350,9 +350,6 @@ class SettingsPanel:
         self.db_neighborhood_dropdown = Dropdown([], self.font, commit_callback=self.apply_db_filters)
         self.db_rule_input = TextInput("", self.font, width=180, placeholder="B3/S23", commit_callback=self.apply_db_filters)
         self.available_columns = set()
-        self.scroll_y, self.scroll_speed = 0, 20
-        self.is_dragging, self.drag_start_y = False, 0
-        self.content_height, self.visible_height, self.hovered_button = 0, 0, None
         self.buttons = {}
         self.setup_panel()
 
@@ -742,8 +739,8 @@ class SettingsPanel:
         surface.set_clip(None)
         self.update_db_scrollbar()
         if self.db_scrollbar_rect and self.db_handle_rect:
-            pygame.draw.rect(surface, SCROLLBAR_COLOR, self.db_scrollbar_rect, border_radius=4)
-            pygame.draw.rect(surface, SCROLLBAR_HANDLE_COLOR, self.db_handle_rect, border_radius=4)
+            pygame.draw.rect(surface, SCROLLBAR_TRACK, self.db_scrollbar_rect, border_radius=4)
+            pygame.draw.rect(surface, SCROLLBAR_HANDLE, self.db_handle_rect, border_radius=4)
 
         if self.db_selected_row_id is not None:
             load_btn = Button(x + padding, surface.get_height() - 36, width - 2 * padding, BUTTON_HEIGHT_LARGE, "Load into Lifeform 1", self.font)
