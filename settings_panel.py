@@ -632,6 +632,23 @@ class SettingsPanel:
                 return None
         return None
 
+    def update_db_scrollbar(self):
+        """Update scrollbar handle geometry based on content and scroll state."""
+        if not self.db_scrollbar_rect:
+            self.db_handle_rect = None
+            return
+        content = max(self.db_content_height, 1)
+        visible = max(self.db_visible_height, 1)
+        if content <= visible:
+            self.db_handle_rect = None
+            return
+        ratio = visible / content
+        self.db_handle_height = max(24, int(self.db_scrollbar_rect.height * ratio))
+        max_scroll = max(content - visible, 1)
+        scroll_ratio = self.db_scroll_y / max_scroll
+        handle_y = self.db_scrollbar_rect.y + int((self.db_scrollbar_rect.height - self.db_handle_height) * scroll_ratio)
+        self.db_handle_rect = pygame.Rect(self.db_scrollbar_rect.x, handle_y, self.db_scrollbar_rect.width, self.db_handle_height)
+
     def draw(self, surface, x, y, width):
         self._reset_buttons()
         self.hovered_button = None
