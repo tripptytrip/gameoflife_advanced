@@ -1,5 +1,5 @@
 # Game of Life Advanced
-![Game of Life Hexagon](game of life hexagon.png)
+![Game of Life Hexagon](game%20of%20life%20hexagon.png)
 A sophisticated and extensible implementation of Conway's Game of Life, built with Python and Pygame. This project goes far beyond a traditional Game of Life simulator, offering a powerful platform for experimentation and discovery in the world of cellular automata.
 
 It features multiple competing lifeforms, selectable grid geometries, and a background genetic algorithm that automatically discovers novel, complex rule sets.
