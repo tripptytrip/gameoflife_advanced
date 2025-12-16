@@ -3,7 +3,6 @@ from settings import (
     TEXT_COLOR,
     PANEL_BACKGROUND_COLOR,
     FONT_NAME,
-    FONT_SIZE,
     BUTTON_COLOR,
     BUTTON_HOVER_COLOR,
     BUTTON_TEXT_COLOR,
