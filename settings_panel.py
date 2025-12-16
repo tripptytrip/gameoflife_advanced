@@ -1,5 +1,3 @@
-# settings_panel.py
-
 import pygame
 from settings import (
     TEXT_COLOR,
@@ -15,12 +13,62 @@ from settings import (
     SCROLLBAR_COLOR,
     SCROLLBAR_HANDLE_COLOR,
     DEFAULT_TRIANGLE_MODE,
+    ACCENT_PRIMARY,
+    SCROLLBAR_TRACK,
 )
 from lifeform import Lifeform
 from neighbor_utils import get_max_neighbors
 from db_explorer import query_rows, get_schema, get_row_by_id, get_unique_values
 
-# ... (Dropdown and NumericInput classes are correct) ...
+class CollapsibleSection:
+    """A collapsible UI section with header and content."""
+    
+    def __init__(self, title, font, icon=None, initially_expanded=True):
+        self.title = title
+        self.font = font
+        self.icon = icon
+        self.expanded = initially_expanded
+        self.header_rect = None
+        self.content_height = 0
+        self.animation_progress = 1.0 if initially_expanded else 0.0
+        
+    def toggle(self):
+        self.expanded = not self.expanded
+        
+    def handle_event(self, event):
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if self.header_rect and self.header_rect.collidepoint(event.pos):
+                self.toggle()
+                return True
+        return False
+    
+    def draw_header(self, surface, x, y, width):
+        """Draw the collapsible header with expand/collapse indicator."""
+        header_height = 32
+        self.header_rect = pygame.Rect(x, y, width, header_height)
+        
+        # Background
+        pygame.draw.rect(surface, BUTTON_COLOR, self.header_rect, border_radius=6)
+        
+        # Hover effect
+        if self.header_rect.collidepoint(pygame.mouse.get_pos()):
+            pygame.draw.rect(surface, BUTTON_HOVER_COLOR, self.header_rect, border_radius=6)
+        
+        # Title
+        title_surf = self.font.render(self.title, True, TEXT_COLOR)
+        surface.blit(title_surf, (x + 12, y + (header_height - title_surf.get_height()) // 2))
+        
+        # Expand/collapse indicator
+        indicator = "▼" if self.expanded else "▶"
+        ind_surf = self.font.render(indicator, True, TEXT_COLOR)
+        surface.blit(ind_surf, (x + width - 24, y + (header_height - ind_surf.get_height()) // 2))
+        
+        return header_height
+    
+    def get_visible_height(self):
+        """Get current visible content height based on animation."""
+        return int(self.content_height * self.animation_progress)
+
 class Button:
     """Shared button with consistent styling and hover handling."""
     def __init__(self, x, y, width, height, text, font, fill=None):
@@ -162,50 +210,133 @@ class NumericInput:
         surface.blit(txt_surf, txt_surf.get_rect(center=rect.center))
 
 class Slider:
-    """Represents a slider UI element."""
-    def __init__(self, label, min_val, max_val, current_val, x, y, width, height, font, live_callback=None, release_callback=None):
-        self.label, self.min, self.max, self.value = label, min_val, max_val, current_val
-        self.rect = pygame.Rect(x, y, width, height)
-        self.handle_radius = height // 2; self.handle_x, self.handle_y = self.get_handle_position(), y + height // 2
-        self.dragging, self.font = False, font
-        self.live_callback, self.release_callback = live_callback, release_callback
-    def get_handle_position(self): return self.rect.x + int(((self.value - self.min) / (self.max - self.min)) * self.rect.width)
+    """Improved slider with larger hit area and visual feedback."""
+    
+    TRACK_HEIGHT = 6
+    HANDLE_RADIUS = 10
+    ACTIVE_HANDLE_RADIUS = 12
+    
+    def __init__(self, label, min_val, max_val, current_val, font, 
+                 live_callback=None, release_callback=None, format_fn=None):
+        self.label = label
+        self.min = min_val
+        self.max = max_val
+        self.value = current_val
+        self.font = font
+        self.live_callback = live_callback
+        self.release_callback = release_callback
+        self.format_fn = format_fn or (lambda v: str(v))
+        
+        self.rect = None
+        self.dragging = False
+        self.hovered = False
+        
+    def get_handle_x(self):
+        if self.rect is None:
+            return 0
+        ratio = (self.value - self.min) / (self.max - self.min) if (self.max - self.min) != 0 else 0
+        return self.rect.x + int(ratio * self.rect.width)
+    
     def handle_event(self, event):
-        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            if ((event.pos[0] - self.handle_x)**2 + (event.pos[1] - self.handle_y)**2)**0.5 <= self.handle_radius: self.dragging = True
+        if self.rect is None:
+            return
+            
+        handle_x = self.get_handle_x()
+        handle_y = self.rect.centery
+        
+        if event.type == pygame.MOUSEMOTION:
+            # Check hover state
+            dist = ((event.pos[0] - handle_x)**2 + (event.pos[1] - handle_y)**2)**0.5
+            self.hovered = dist <= self.HANDLE_RADIUS * 1.5 or self.rect.collidepoint(event.pos)
+            
+            if self.dragging:
+                # Update value during drag
+                new_x = max(self.rect.x, min(event.pos[0], self.rect.right))
+                ratio = (new_x - self.rect.x) / self.rect.width
+                self.value = int(self.min + ratio * (self.max - self.min))
+                if self.live_callback:
+                    self.live_callback(self.value)
+                    
+        elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            # Start drag if clicking on handle or track
+            if self.hovered or self.rect.collidepoint(event.pos):
+                self.dragging = True
+                # Jump to click position
+                new_x = max(self.rect.x, min(event.pos[0], self.rect.right))
+                ratio = (new_x - self.rect.x) / self.rect.width
+                self.value = int(self.min + ratio * (self.max - self.min))
+                if self.live_callback:
+                    self.live_callback(self.value)
+                    
         elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-            if self.dragging: self.dragging = False; 
-            if self.release_callback: self.release_callback(self.value)
-        elif event.type == pygame.MOUSEMOTION and self.dragging:
-            self.handle_x = max(self.rect.x, min(event.pos[0], self.rect.x + self.rect.width))
-            self.value = int(self.min + ((self.handle_x - self.rect.x) / self.rect.width) * (self.max - self.min))
-            if self.live_callback: self.live_callback(self.value)
-    def draw(self, surface, draw_labels=True, label_pos=None, value_pos=None):
-        # Ensure handle is positioned after any layout changes
-        self.handle_x = self.get_handle_position()
-        if draw_labels:
-            label_surf = self.font.render(f"{self.label}", True, TEXT_COLOR)
-            value_surf = self.font.render(f"{self.value}", True, TEXT_COLOR)
-            if label_pos is None:
-                surface.blit(label_surf, label_surf.get_rect(midtop=(self.rect.centerx, self.rect.y - 20)))
-            else:
-                surface.blit(label_surf, label_pos)
-            if value_pos is None:
-                surface.blit(value_surf, value_surf.get_rect(midtop=(self.rect.centerx, self.rect.y + self.rect.height + 5)))
-            else:
-                surface.blit(value_surf, value_pos)
-        pygame.draw.rect(surface, SCROLLBAR_COLOR, self.rect)
-        pygame.draw.circle(surface, BUTTON_COLOR, (self.handle_x, self.handle_y), self.handle_radius)
-        pygame.draw.circle(surface, TEXT_COLOR, (self.handle_x, self.handle_y), self.handle_radius, 2)
+            if self.dragging:
+                self.dragging = False
+                if self.release_callback:
+                    self.release_callback(self.value)
+    
+    def draw(self, surface, rect):
+        self.rect = rect
+        handle_x = self.get_handle_x()
+        handle_y = rect.centery
+        
+        # Track background
+        track_rect = pygame.Rect(
+            rect.x, 
+            rect.centery - self.TRACK_HEIGHT // 2,
+            rect.width, 
+            self.TRACK_HEIGHT
+        )
+        pygame.draw.rect(surface, SCROLLBAR_TRACK, track_rect, border_radius=3)
+        
+        # Filled portion
+        filled_rect = pygame.Rect(
+            rect.x,
+            rect.centery - self.TRACK_HEIGHT // 2,
+            handle_x - rect.x,
+            self.TRACK_HEIGHT
+        )
+        pygame.draw.rect(surface, ACCENT_PRIMARY, filled_rect, border_radius=3)
+        
+        # Handle
+        radius = self.ACTIVE_HANDLE_RADIUS if (self.dragging or self.hovered) else self.HANDLE_RADIUS
+        
+        # Handle shadow
+        pygame.draw.circle(surface, (0, 0, 0, 50), (handle_x + 1, handle_y + 2), radius)
+        
+        # Handle fill
+        handle_color = (130, 133, 255) if self.dragging else ACCENT_PRIMARY
+        pygame.draw.circle(surface, handle_color, (handle_x, handle_y), radius)
+        
+        # Handle border
+        pygame.draw.circle(surface, TEXT_COLOR, (handle_x, handle_y), radius, 2)
+        
+        # Value tooltip on drag
+        if self.dragging:
+            value_text = self.format_fn(self.value)
+            value_surf = self.font.render(value_text, True, TEXT_COLOR)
+            tooltip_rect = value_surf.get_rect(midbottom=(handle_x, handle_y - radius - 4))
+            
+            # Tooltip background
+            bg_rect = tooltip_rect.inflate(12, 6)
+            pygame.draw.rect(surface, (50, 52, 65), bg_rect, border_radius=4)
+            surface.blit(value_surf, tooltip_rect)
 
 class SettingsPanel:
     def __init__(self, game):
-        self.game, self.font = game, pygame.font.SysFont(FONT_NAME, FONT_SIZE)
+        self.game = game
+        self.font = game.font_manager.get('base')
         self.active_view = "settings"
         self.padding = 12
         self.section_gap = 18
         self.control_gap = 8
         self.slider_track_height = 16
+
+        self.sections = {
+            "statistics": CollapsibleSection("STATISTICS", self.game.font_manager.get('lg')),
+            "settings": CollapsibleSection("SETTINGS", self.game.font_manager.get('lg')),
+            "lifeforms": CollapsibleSection("LIFEFORM STATUS", self.game.font_manager.get('lg')),
+        }
+
         self.db_path, self.db_table = "species.db", "life_records"
         self.db_schema, self.db_columns, self.db_rows, self.db_total, self.db_page = {}, [], [], 0, 0
         self.db_page_size, self.db_sort_by, self.db_sort_dir = 50, "id", "DESC"
@@ -222,7 +353,6 @@ class SettingsPanel:
         self.available_columns = set()
         self.scroll_y, self.scroll_speed = 0, 20
         self.is_dragging, self.drag_start_y = False, 0
-        self.scrollbar_rect, self.handle_rect, self.handle_height = None, None, 0
         self.content_height, self.visible_height, self.hovered_button = 0, 0, None
         self.buttons = {}
         self.setup_panel()
@@ -237,7 +367,7 @@ class SettingsPanel:
             'Number of Generations': { 'min_val': 1, 'max_val': 1000, 'current_val': self.game.auto_run_generations, 'release_callback': self.update_number_of_generations },
             'Number of Sessions': { 'min_val': 1, 'max_val': 100, 'current_val': 1, 'release_callback': self.update_number_of_sessions }
         }
-        self.slider_objects = {label: Slider(label=label, x=0, y=0, width=0, height=self.slider_track_height, font=self.font, **cfg) for label, cfg in self.slider_configs.items()}
+        self.slider_objects = {label: Slider(label=label, font=self.font, **cfg) for label, cfg in self.slider_configs.items()}
         self.numeric_configs = {
             'Initial Alive Percentage': {'min': 0, 'max': 100, 'quick': [-5, -1, 1, 5]}, 'Grid Width': {'min': 10, 'max': 400, 'quick': [-10, 10]},
             'Grid Height': {'min': 10, 'max': 200, 'quick': [-10, 10]}, 'Number of Generations': {'min': 1, 'max': 1000, 'quick': ['half', 'double']},
@@ -367,10 +497,6 @@ class SettingsPanel:
                     self.apply_settings()
                     self.game.create_grid()
                     return
-
-        elif event.type == pygame.MOUSEWHEEL:
-            self.scroll_y -= event.y * self.scroll_speed
-            self.scroll_y = max(0, min(self.scroll_y, self.get_max_scroll()))
 
     def _handle_db_event(self, event):
         self.db_shape_dropdown.handle_event(event)
@@ -509,13 +635,15 @@ class SettingsPanel:
             except ValueError:
                 return None
         return None
+
     def draw(self, surface, x, y, width):
         self._reset_buttons()
         self.hovered_button = None
         if self.active_view == "db_explorer":
-            self._draw_db_explorer(surface, x, y, width)
+            return self._draw_db_explorer(surface, x, y, width)
         else:
-            self._draw_settings(surface, x, y, width)
+            return self._draw_settings(surface, x, y, width)
+
     def _draw_db_explorer(self, surface, x, y, width):
         padding = 10
         current_y = y + padding
@@ -623,11 +751,13 @@ class SettingsPanel:
             load_btn.draw(surface); self.buttons['Load into Lifeform 1'] = load_btn
             if load_btn.is_hovered(pygame.mouse.get_pos()):
                 self.hovered_button = "Load into Lifeform 1"
+        return_height = surface.get_height() - y
+        return return_height
 
     def _draw_slider_row(self, surface, origin_x, origin_y, layout_y, usable_width, label, slider):
         """Lay out one slider + numeric + quick buttons row."""
         label_surf = self.font.render(label, True, TEXT_COLOR)
-        label_y = origin_y + layout_y - self.scroll_y
+        label_y = origin_y + layout_y
         surface.blit(label_surf, (origin_x, label_y))
         label_height = label_surf.get_height()
 
@@ -641,12 +771,11 @@ class SettingsPanel:
         slider_width = max(80, usable_width - numeric_w - quick_block - gap)
 
         slider_y = label_y + label_height + 6
-        slider.rect = pygame.Rect(origin_x, slider_y, slider_width, self.slider_track_height)
-        slider.handle_y = slider.rect.y + slider.handle_radius
-        slider.draw(surface, draw_labels=False)
+        slider_rect = pygame.Rect(origin_x, slider_y, slider_width, self.slider_track_height)
+        slider.draw(surface, slider_rect)
 
         btn_y = slider_y - 1
-        btn_x = slider.rect.right + gap
+        btn_x = slider_rect.right + gap
         self.numeric_controls[label]['buttons'] = []
         for action in quick_actions:
             text = f"{action}" if isinstance(action, (int, float)) else ("1/2" if action == "half" else "x2")
@@ -658,30 +787,25 @@ class SettingsPanel:
         num_rect = pygame.Rect(origin_x + usable_width - numeric_w, btn_y, numeric_w, btn_h)
         self.numeric_controls[label]['input'].draw(surface, num_rect)
 
-        row_bottom = max(slider.rect.bottom, num_rect.bottom, btn_y + btn_h)
+        row_bottom = max(slider_rect.bottom, num_rect.bottom, btn_y + btn_h)
         return layout_y + (row_bottom - label_y) + self.section_gap
 
     def _draw_settings(self, surface, x, y, width):
         padding = self.padding
-        scrollbar_width = 14
-        usable_width = width - scrollbar_width - padding * 2
-        self.visible_height = surface.get_height() - y
-        self.scrollbar_rect = pygame.Rect(x + width - scrollbar_width, y, scrollbar_width, self.visible_height)
-        clip_rect = pygame.Rect(x, y, width - scrollbar_width, self.visible_height)
-        surface.set_clip(clip_rect)
+        usable_width = width
 
-        layout_y = padding
+        layout_y = 0
         for label, slider in self.slider_objects.items():
-            layout_y = self._draw_slider_row(surface, x + padding, y, layout_y, usable_width, label, slider)
+            layout_y = self._draw_slider_row(surface, x, y, layout_y, usable_width, label, slider)
 
         layout_y += self.section_gap // 2
         line_height = self.font.get_linesize()
         for label, data in self.selections.items():
             label_surf = self.font.render(label, True, TEXT_COLOR)
-            label_y = y + layout_y - self.scroll_y
+            label_y = y + layout_y
             surface.blit(label_surf, (x + padding, label_y))
             layout_y += line_height + 4
-            selection_rect = pygame.Rect(x + padding, y + layout_y - self.scroll_y, usable_width, line_height + 10)
+            selection_rect = pygame.Rect(x + padding, y + layout_y, usable_width, line_height + 10)
             data['rect'] = selection_rect
             pygame.draw.rect(surface, BUTTON_COLOR, selection_rect, border_radius=BUTTON_BORDER_RADIUS)
             pygame.draw.rect(surface, TEXT_COLOR, selection_rect, 2, border_radius=BUTTON_BORDER_RADIUS)
@@ -690,7 +814,7 @@ class SettingsPanel:
 
         actions = ['Apply', 'Randomise Lifeforms', 'Auto Run', 'DB Explorer']
         for key in actions:
-            btn_rect_y = y + layout_y - self.scroll_y
+            btn_rect_y = y + layout_y
             btn = Button(x + padding, btn_rect_y, usable_width, BUTTON_HEIGHT_LARGE, key, self.font)
             btn.draw(surface)
             self.buttons[key] = btn
@@ -700,16 +824,18 @@ class SettingsPanel:
 
         layout_y += self.section_gap // 2
         for lifeform_id, rules in self.lifeform_rules.items():
+            if lifeform_id > self.game.number_of_lifeforms:
+                continue
             max_n = get_max_neighbors(self.game.shape, getattr(self.game, "triangle_mode", "edge+vertex"))
             lf_label = self.font.render(f'Lifeform {lifeform_id} Rules (0-{max_n})', True, TEXT_COLOR)
-            label_y = y + layout_y - self.scroll_y
+            label_y = y + layout_y
             surface.blit(lf_label, (x + padding, label_y))
             layout_y += line_height + 4
 
             birth_label = self.font.render(f'  Birth Rules (0-{max_n})', True, TEXT_COLOR)
-            surface.blit(birth_label, (x + padding, y + layout_y - self.scroll_y))
+            surface.blit(birth_label, (x + padding, y + layout_y))
             layout_y += line_height
-            birth_rect = pygame.Rect(x + padding + 10, y + layout_y - self.scroll_y, usable_width - 20, line_height + 10)
+            birth_rect = pygame.Rect(x + padding + 10, y + layout_y, usable_width - 20, line_height + 10)
             rules['birth_rect'] = birth_rect
             pygame.draw.rect(surface, BUTTON_COLOR, birth_rect)
             pygame.draw.rect(surface, TEXT_COLOR, birth_rect, 2)
@@ -717,9 +843,9 @@ class SettingsPanel:
             layout_y += line_height + 12
 
             surv_label = self.font.render(f'  Survival Rules (0-{max_n})', True, TEXT_COLOR)
-            surface.blit(surv_label, (x + padding, y + layout_y - self.scroll_y))
+            surface.blit(surv_label, (x + padding, y + layout_y))
             layout_y += line_height
-            survival_rect = pygame.Rect(x + padding + 10, y + layout_y - self.scroll_y, usable_width - 20, line_height + 10)
+            survival_rect = pygame.Rect(x + padding + 10, y + layout_y, usable_width - 20, line_height + 10)
             rules['survival_rect'] = survival_rect
             pygame.draw.rect(surface, BUTTON_COLOR, survival_rect)
             pygame.draw.rect(surface, TEXT_COLOR, survival_rect, 2)
@@ -727,34 +853,5 @@ class SettingsPanel:
             layout_y += line_height + self.section_gap
 
         self.content_height = layout_y + padding
-        surface.set_clip(None)
-        self.update_scrollbar()
-        if self.scrollbar_rect and self.handle_rect:
-            pygame.draw.rect(surface, SCROLLBAR_COLOR, self.scrollbar_rect)
-            pygame.draw.rect(surface, SCROLLBAR_HANDLE_COLOR, self.handle_rect)
-
-    def get_max_scroll(self): return max(self.content_height - self.visible_height, 0)
-    def update_scrollbar(self):
-        if self.content_height <= self.visible_height: self.handle_rect = None; return
-        track_h = self.scrollbar_rect.height
-        self.handle_height = max(int(track_h * self.visible_height / self.content_height), 20)
-        max_scroll = self.get_max_scroll()
-        prop = self.scroll_y / max_scroll if max_scroll > 0 else 0
-        handle_y = self.scrollbar_rect.y + int(prop * (track_h - self.handle_height))
-        self.handle_rect = pygame.Rect(self.scrollbar_rect.x, handle_y, self.scrollbar_rect.width, self.handle_height)
-
-    def update_db_scrollbar(self):
-        if not self.db_scrollbar_rect:
-            self.db_handle_rect = None
-            return
-        if self.db_content_height <= self.db_visible_height:
-            self.db_handle_rect = None
-            self.db_scroll_y = 0
-            return
-        track_h = self.db_scrollbar_rect.height
-        self.db_handle_height = max(int(track_h * self.db_visible_height / self.db_content_height), 20)
-        max_scroll = max(self.db_content_height - self.db_visible_height, 0)
-        self.db_scroll_y = max(0, min(self.db_scroll_y, max_scroll))
-        prop = self.db_scroll_y / max_scroll if max_scroll > 0 else 0
-        handle_y = self.db_scrollbar_rect.y + int(prop * (track_h - self.db_handle_height))
-        self.db_handle_rect = pygame.Rect(self.db_scrollbar_rect.x, handle_y, self.db_scrollbar_rect.width, self.db_handle_height)
+        
+        return self.content_height
