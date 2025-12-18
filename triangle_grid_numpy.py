@@ -245,13 +245,7 @@ class TriangleGridNumpy(SquareGrid):
         return births, deaths, static_cells, lifeform_alive_counts, lifeform_static_counts, lifeform_metrics, lifeform_kill_counts, changed_cells
 
     def draw(self, surface):
-        for r in range(self.grid_height):
-            for c in range(self.grid_width):
-                lifeform_id = self.grid[r, c]
-                lifeform = self.get_lifeform_by_id(lifeform_id)
-                alive_duration = self.grid_lifespans[r, c]
-                upward = (c + r) % 2 == 0
-                TriangleCell.draw_static(surface, c, r, self.cell_size, upward, self.offset_x, self.offset_y, lifeform, alive_duration)
+        pass
 
     def handle_click(self, pos):
         mouse_x, mouse_y = pos

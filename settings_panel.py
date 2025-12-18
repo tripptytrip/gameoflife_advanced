@@ -374,7 +374,8 @@ class SettingsPanel:
         self._attach_slider_handlers()
         self.selections = {
             'Grid Shape': { 'options': ['triangle', 'square', 'hexagon'], 'selected': self.game.shape, 'rect': None },
-            'Triangle Neighborhood': { 'options': ['edge', 'edge+vertex'], 'selected': self.game.triangle_mode, 'rect': None }
+            'Triangle Neighborhood': { 'options': ['edge', 'edge+vertex'], 'selected': self.game.triangle_mode, 'rect': None },
+            'View Mode': { 'options': ['2D', '3D'], 'selected': self.game.view_mode, 'rect': None }
         }
         self.lifeform_rules = {idx: {'birth_rules': '', 'survival_rules': '', 'birth_rect': None, 'survival_rect': None} for idx in range(1, 11)}
         self.update_lifeform_rules()
@@ -484,14 +485,18 @@ class SettingsPanel:
                     self.auto_run()
 
             # Toggle simple selections
-            for data in self.selections.values():
+            for label, data in self.selections.items():
                 if data['rect'] and data['rect'].collidepoint(pos):
-                    idx = (data['options'].index(data['selected']) + 1) % len(data['options'])
-                    data['selected'] = data['options'][idx]
-                    self.game.shape = self.selections['Grid Shape']['selected']
-                    self.game.triangle_mode = self.selections['Triangle Neighborhood']['selected']
-                    self.apply_settings()
-                    self.game.create_grid()
+                    if label == 'View Mode':
+                        self.game.toggle_view_mode()
+                        data['selected'] = self.game.view_mode
+                    else:
+                        idx = (data['options'].index(data['selected']) + 1) % len(data['options'])
+                        data['selected'] = data['options'][idx]
+                        self.game.shape = self.selections['Grid Shape']['selected']
+                        self.game.triangle_mode = self.selections['Triangle Neighborhood']['selected']
+                        self.apply_settings()
+                        self.game.create_grid()
                     return
 
     def _handle_db_event(self, event):

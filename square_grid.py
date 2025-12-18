@@ -80,12 +80,7 @@ class SquareGrid:
 
 
     def draw(self, surface):
-        for y in range(self.grid_height):
-            for x in range(self.grid_width):
-                lifeform_id = self.grid[y, x]
-                lifeform = self.get_lifeform_by_id(lifeform_id)
-                alive_duration = self.grid_lifespans[y, x]
-                SquareCell.draw(surface, x, y, self.cell_size, self.offset_x, self.offset_y, lifeform, alive_duration)
+        pass
 
 
     def get_lifeform_by_id(self, lifeform_id):

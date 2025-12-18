@@ -82,23 +82,7 @@ class HexagonGridNumpy(SquareGrid):
             self.grid_lifespans[alive_rows, alive_cols] = 1
 
     def draw(self, surface):
-        for r in range(self.grid_height):
-            for c in range(self.grid_width):
-                lifeform_id = self.grid[r, c]
-                lifeform = self.get_lifeform_by_id(lifeform_id)
-                alive_duration = self.grid_lifespans[r, c]
-
-                # Pass axial coordinates into the renderer so it can calculate the center itself
-                HexagonCell.draw_static(
-                    surface,
-                    c,
-                    r,
-                    self.cell_size,
-                    self.offset_x,
-                    self.offset_y,
-                    lifeform,
-                    alive_duration,
-                )
+        pass
 
     def update(self):
         is_alive = self.grid > 0
