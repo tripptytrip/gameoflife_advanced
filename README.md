@@ -4,6 +4,8 @@ A sophisticated and extensible implementation of Conway's Game of Life, built wi
 
 It features multiple competing lifeforms, selectable grid geometries, and a background genetic algorithm that automatically discovers novel, complex rule sets.
 
+![Game of Life Hexagon](game%20of%20life%20hexagon.png)
+
 ### Table of Contents
 
 - [Features](#features)
